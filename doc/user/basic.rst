@@ -216,7 +216,15 @@ Basic Config Commands
 .. index:: service password-encryption
 .. clicmd:: service password-encryption
 
-   Encrypt password.
+   Encrypt password.  Login passwords can always be encrypted while
+   support for encryption of particular protocol passwords,
+   authentication strings, or keys is per protocol and is dependent on
+   the presence of a properly formatted `Encryption key file`_.
+
+   .. note::
+
+      Once encrypted, there is no way to display the unencrypted
+      form, even if "no service password-encryption" is specified.
 
 .. index:: service advanced-vty
 .. clicmd:: service advanced-vty
@@ -441,6 +449,107 @@ Puppet, etc.), upgrade considerations differ somewhat:
    configuration generation to a newer ``frr version`` as appropriate.  Perform
    the same checks as when rolling out upgrades.
 
+
+.. _protocol-key-encryption:
+
+Protocol key encryption
+-----------------------
+
+Various routing protocols include configurable passwords, authentication
+strings, or other sorts of key strings that will be referred to in this
+section as "protocol keys." Historically, FRR has written these protocol keys
+as plain text to configuration files and to the craft interface.
+
+In some environments, it is preferable to encrypt these strings in saved
+and displayed configuration.
+
+When ``service password-encryption`` is specified in the configuration,
+FRR will attempt to encrypt any plain-text protocol keys using RSA
+public-key encryption. After encryption, even if
+``no service password-encryption`` is specified, only the
+encrypted form will appear in saved and displayed configuration.
+
+The public and private encryption keys are obtained from the file
+~user/.ssh/frr where "~user" designates user's home directory as
+found by getpwuid(3), and the target uid is the effective userid as
+returned by geteuid(2) in the routing daemon process.
+
+Protocol keys are encrypted using the public key and decrypted with
+the private key.
+
+Encrypted protocol keys are encoded as base64 strings. Note that RSA
+encryption imposes a size limit on the protocol key slightly less than
+the size of the RSA key. As RSA keys are typically 128 bytes or more
+and protocol keys are typically 16 bytes or fewer, it is unlikely
+that this limit will be reached.
+
+In the CLI and text configuration files, encrypted protocol keys are
+prefixed with the keyword "101" to distinguish them from plain-text
+protocol keys.
+
+   .. note::
+
+      FRR must be built with ``--with-crypto=openssl`` for this feature
+      to be enabled.  Also support is per protocol.  See each protocol's
+      configuration documentation to check which protocol password,
+      authentication string, or key configuration commands support a
+      ``101`` keyword.
+
+Encryption key file
+^^^^^^^^^^^^^^^^^^^
+
+Protocol key encryption depends on a single RSA private key file. The
+private key comprises a list of numerical values and is a superset
+of the corresponding public key elements. The private key may be in
+either PKCS1 or PKCS8 format.
+
+The open-source projects openssl, libressl, and gnutls contain tools
+that can generate the required private key file format.
+In the examples below, for ``<user>``, substitute the name of the
+FRR user (usually ``frr``).
+
+To generate the private key file file using the openssl/libressl tool:
+
+.. code-block:: shell
+
+   chown <user> ~<user>/.ssh
+   chmod 0700 ~<user>/.ssh
+   openssl genpkey -algorithm RSA -out ~<user>/.ssh/frr
+   chown <user> ~<user>/.ssh/frr
+   chmod 0400 ~<user>/.ssh/frr
+
+To generate the private key file file using the gnutls tool:
+
+.. code-block:: shell
+
+   chown <user> ~<user>/.ssh
+   chmod 0700 ~<user>/.ssh
+   certtool --generate-privkey --key-type=rsa --null-password --outfile ~<user>/.ssh/frr
+   chown <user> ~<user>/.ssh/frr
+   chmod 0400 ~<user>/.ssh/frr
+
+
+   .. note::
+
+      If the key file is not available, encryption of new protocol
+      passwords, authentication strings, and keys will be disabled,
+      and decryption of previously-encrypted strings will fail. Once
+      the key file is restored, normal encryption and decryption
+      operation can occur. If the key file is lost, previously-encrypted
+      strings are not recoverable. New encrypted strings can be generated
+      by configuring the original plain-text passwords and encrypting with
+      a new key file.
+
+Protocol key encryption status
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. index:: show keycrypt status
+.. clicmd:: show keycrypt status
+
+   Display status of protocol key encryption:
+
+* enable/disable
+* keyfile path and readability
+* counts of plain/encrypted keys per daemon
 
 .. _terminal-mode-commands:
 
