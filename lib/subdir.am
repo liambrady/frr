@@ -40,6 +40,7 @@ lib_libfrr_la_SOURCES = \
 	lib/jhash.c \
 	lib/json.c \
 	lib/keychain.c \
+	lib/keycrypt.c \
 	lib/lib_errors.c \
 	lib/lib_vty.c \
 	lib/libfrr.c \
@@ -120,6 +121,7 @@ vtysh_scan += \
 	$(top_srcdir)/lib/if.c \
 	$(top_srcdir)/lib/if_rmap.c \
 	$(top_srcdir)/lib/keychain.c \
+	$(top_srcdir)/lib/keycrypt.c \
 	$(top_srcdir)/lib/lib_vty.c \
 	$(top_srcdir)/lib/nexthop_group.c \
 	$(top_srcdir)/lib/plist.c \
@@ -189,6 +191,7 @@ pkginclude_HEADERS += \
 	lib/jhash.h \
 	lib/json.h \
 	lib/keychain.h \
+	lib/keycrypt.h \
 	lib/lib_errors.h \
 	lib/lib_vty.h \
 	lib/libfrr.h \
