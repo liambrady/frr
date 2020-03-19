@@ -16,12 +16,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <openssl/bio.h>
-#include <openssl/pem.h>
-#include <openssl/evp.h>
-#include <openssl/rsa.h>
-#include <openssl/engine.h>
-
 #include <zebra.h>
 
 #include "memory.h"
@@ -30,6 +24,12 @@
 #include "command.h"
 
 #ifdef CRYPTO_OPENSSL
+
+#include <openssl/bio.h>
+#include <openssl/pem.h>
+#include <openssl/evp.h>
+#include <openssl/rsa.h>
+#include <openssl/engine.h>
 
 #define KEYFILE_NAME_PRIVATE	".ssh/frr"
 #define PWENT_BUFSIZE	512
