@@ -716,6 +716,9 @@ int bgp_vty_return(struct vty *vty, int ret)
 	case BGP_GR_NO_OPERATION:
 		str = GR_NO_OPER;
 		break;
+	case BGP_ERR_CRYPTO_FAILED:
+		str = "Cryptographic operation failed";
+		break;
 	}
 	if (str) {
 		vty_out(vty, "%% %s\n", str);
@@ -4007,22 +4010,29 @@ DEFUN (no_neighbor_solo,
 
 DEFUN (neighbor_password,
        neighbor_password_cmd,
-       "neighbor <A.B.C.D|X:X::X:X|WORD> password LINE",
+       "neighbor <A.B.C.D|X:X::X:X|WORD> password [101] LINE",
        NEIGHBOR_STR
        NEIGHBOR_ADDR_STR2
        "Set a password\n"
+       "Encrypted password follows\n"
        "The password\n")
 {
 	int idx_peer = 1;
 	int idx_line = 3;
 	struct peer *peer;
 	int ret;
+	bool is_encrypted = false;
+
+	if (argc == 5) {
+	    is_encrypted = true;
+            idx_line = 4;
+        }
 
 	peer = peer_and_group_lookup_vty(vty, argv[idx_peer]->arg);
 	if (!peer)
 		return CMD_WARNING_CONFIG_FAILED;
 
-	ret = peer_password_set(peer, argv[idx_line]->arg);
+	ret = peer_password_set(peer, argv[idx_line]->arg, is_encrypted);
 	return bgp_vty_return(vty, ret);
 }
 
@@ -14417,9 +14427,15 @@ static void bgp_config_write_peer_global(struct vty *vty, struct bgp *bgp,
 	}
 
 	/* password */
-	if (peergroup_flag_check(peer, PEER_FLAG_PASSWORD))
-		vty_out(vty, " neighbor %s password %s\n", addr,
+	if (peergroup_flag_check(peer, PEER_FLAG_PASSWORD)) {
+		if (peer->password_encrypted) {
+		    vty_out(vty, " neighbor %s password 101 %s\n", addr,
+			peer->password_encrypted);
+		} else {
+		    vty_out(vty, " neighbor %s password %s\n", addr,
 			peer->password);
+		}
+	}
 
 	/* neighbor solo */
 	if (CHECK_FLAG(peer->flags, PEER_FLAG_LONESOUL)) {

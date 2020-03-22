@@ -34,6 +34,7 @@
 #include "zclient.h"
 #include <lib/json.h>
 #include "defaults.h"
+#include "keycrypt.h"
 
 #include "ospfd/ospfd.h"
 #include "ospfd/ospf_asbr.h"
@@ -883,8 +884,10 @@ struct ospf_vl_config_data {
 	struct in_addr vl_peer; /* command line vl_peer */
 	int auth_type;		/* Authehntication type, if given */
 	char *auth_key;		/* simple password if present */
+	bool auth_key_is_encrypted;
 	int crypto_key_id;      /* Cryptographic key ID */
 	char *md5_key;		/* MD5 authentication key */
+	bool md5_key_is_encrypted;
 	int hello_interval;     /* Obvious what these are... */
 	int retransmit_interval;
 	int transmit_delay;
@@ -946,6 +949,52 @@ ospf_find_vl_data(struct ospf *ospf, struct ospf_vl_config_data *vl_config)
 	return vl_data;
 }
 
+/*
+ * Returns 0 on success. On successful return, caller must free
+ * dynamically-allocated *ppPlainText, *ppCryptText if any.
+ */
+static int
+build_passwords(
+    const char *password_in,	/* IN */
+    bool is_encrypted,		/* IN */
+    char **ppPlainText,		/* OUT MTYPE_KEYCRYPT_PLAIN_TEXT */
+    char **ppCryptText)		/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
+{
+	*ppCryptText = NULL;
+	char *password;
+	struct memtype *mt = MTYPE_KEYCRYPT_PLAIN_TEXT;
+
+        if (is_encrypted) {
+#ifdef KEYCRYPT_ENABLED
+                if (keycrypt_decrypt(mt,
+                        password_in, strlen(password_in),
+                        &password, NULL)) {
+                        zlog_err("%s: keycrypt_decrypt failed", __func__);
+                        return -1;
+                }
+#else
+		zlog_err("%s: keycrypt not supported in this build", __func__);
+		return -1;
+#endif
+        } else {
+		password = XSTRDUP(mt, password_in);
+        }
+
+#ifdef KEYCRYPT_ENABLED
+	if (keycrypt_is_now_encrypting() || is_encrypted) {
+		if (keycrypt_encrypt(password, strlen(password),
+		    ppCryptText, NULL)) {
+                        zlog_err("%s: keycrypt_encrypt failed", __func__);
+                        XFREE(mt, password);
+                        return -1;
+		}
+        }
+#endif
+
+	*ppPlainText = password;
+
+	return 0;
+}
 
 static int ospf_vl_set_security(struct ospf_vl_data *vl_data,
 				struct ospf_vl_config_data *vl_config)
@@ -962,12 +1011,38 @@ static int ospf_vl_set_security(struct ospf_vl_data *vl_data,
 	}
 
 	if (vl_config->auth_key) {
-		memset(IF_DEF_PARAMS(ifp)->auth_simple, 0,
-		       OSPF_AUTH_SIMPLE_SIZE + 1);
-		strlcpy((char *)IF_DEF_PARAMS(ifp)->auth_simple,
-			vl_config->auth_key,
-			sizeof(IF_DEF_PARAMS(ifp)->auth_simple));
+		char	*pPlainText;
+		char	*pCryptText;
+
+		if (!vl_config->auth_key_is_encrypted &&
+		    (vl_config->auth_key)[0] == 0) {
+
+		    /* unset */
+		    XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
+			IF_DEF_PARAMS(ifp)->auth_simple_encrypted);
+		    *(char *)IF_DEF_PARAMS(ifp)->auth_simple = 0;
+		} else {
+
+		    if (build_passwords(vl_config->auth_key,
+			vl_config->auth_key_is_encrypted, &pPlainText,
+			&pCryptText))
+			    return CMD_WARNING_CONFIG_FAILED;
+
+		    memset(IF_DEF_PARAMS(ifp)->auth_simple, 0,
+			   OSPF_AUTH_SIMPLE_SIZE + 1);
+		    strlcpy((char *)IF_DEF_PARAMS(ifp)->auth_simple,
+			    pPlainText,
+			    sizeof(IF_DEF_PARAMS(ifp)->auth_simple));
+		    XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pPlainText);
+		    XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
+			IF_DEF_PARAMS(ifp)->auth_simple_encrypted);
+		    IF_DEF_PARAMS(ifp)->auth_simple_encrypted = pCryptText;
+		}
+
 	} else if (vl_config->md5_key) {
+		char	*pPlainText;
+		char	*pCryptText;
+
 		if (ospf_crypt_key_lookup(IF_DEF_PARAMS(ifp)->auth_crypt,
 					  vl_config->crypto_key_id)
 		    != NULL) {
@@ -975,11 +1050,20 @@ static int ospf_vl_set_security(struct ospf_vl_data *vl_data,
 				vl_config->crypto_key_id);
 			return CMD_WARNING;
 		}
+
+		if (build_passwords(vl_config->md5_key,
+		    vl_config->md5_key_is_encrypted, &pPlainText, &pCryptText))
+			return CMD_WARNING_CONFIG_FAILED;
+
 		ck = ospf_crypt_key_new();
 		ck->key_id = vl_config->crypto_key_id;
 		memset(ck->auth_key, 0, OSPF_AUTH_MD5_SIZE + 1);
-		strlcpy((char *)ck->auth_key, vl_config->md5_key,
+		strlcpy((char *)ck->auth_key, pPlainText,
 			sizeof(ck->auth_key));
+
+		XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pPlainText);
+		XFREE(MTYPE_KEYCRYPT_CIPHER_B64, ck->auth_key_encrypted);
+		ck->auth_key_encrypted = pCryptText;
 
 		ospf_crypt_key_add(IF_DEF_PARAMS(ifp)->auth_crypt, ck);
 	} else if (vl_config->crypto_key_id != 0) {
@@ -1032,14 +1116,17 @@ static int ospf_vl_set_timers(struct ospf_vl_data *vl_data,
 
 
 /* The business end of all of the above */
-static int ospf_vl_set(struct ospf *ospf, struct ospf_vl_config_data *vl_config)
+static int ospf_vl_set(struct vty *vty, struct ospf *ospf,
+    struct ospf_vl_config_data *vl_config)
 {
 	struct ospf_vl_data *vl_data;
 	int ret;
 
 	vl_data = ospf_find_vl_data(ospf, vl_config);
-	if (!vl_data)
+	if (!vl_data) {
+                vty_out(vty, "Error: can't find virtual link data\n");
 		return CMD_WARNING_CONFIG_FAILED;
+        }
 
 	/* Process this one first as it can have a fatal result, which can
 	   only logically occur if the virtual link exists already
@@ -1047,14 +1134,18 @@ static int ospf_vl_set(struct ospf *ospf, struct ospf_vl_config_data *vl_config)
 	   running configuration such as unexpectedly altered timer
 	   values etc.*/
 	ret = ospf_vl_set_security(vl_data, vl_config);
-	if (ret != CMD_SUCCESS)
+	if (ret != CMD_SUCCESS) {
+                vty_out(vty, "Error: can't set virtual link security parameters\n");
 		return ret;
+        }
 
 	/* Set any time based parameters, these area already range checked */
 
 	ret = ospf_vl_set_timers(vl_data, vl_config);
-	if (ret != CMD_SUCCESS)
+	if (ret != CMD_SUCCESS) {
+                vty_out(vty, "Error: can't set virtual link timers\n");
 		return ret;
+        }
 
 	return CMD_SUCCESS;
 }
@@ -1089,17 +1180,19 @@ static int ospf_vl_set(struct ospf *ospf, struct ospf_vl_config_data *vl_config)
 
 #define VLINK_HELPSTR_AUTH_SIMPLE                                              \
 	"Authentication password (key)\n"                                      \
+	"Encrypted key follows\n"                                              \
 	"The OSPF password (key)\n"
 
 #define VLINK_HELPSTR_AUTH_MD5                                                 \
 	"Message digest authentication password (key)\n"                       \
 	"Key ID\n"                                                             \
 	"Use MD5 algorithm\n"                                                  \
+	"Encrypted key follows\n"                                              \
 	"The OSPF password (key)\n"
 
 DEFUN (ospf_area_vlink,
        ospf_area_vlink_cmd,
-       "area <A.B.C.D|(0-4294967295)> virtual-link A.B.C.D [authentication [<message-digest|null>]] [<message-digest-key (1-255) md5 KEY|authentication-key AUTH_KEY>]",
+       "area <A.B.C.D|(0-4294967295)> virtual-link A.B.C.D [authentication [<message-digest|null>]] [<message-digest-key (1-255) md5 [101] KEY|authentication-key [101] AUTH_KEY>]",
        VLINK_HELPSTR_IPADDR
        "Enable authentication on this virtual link\n"
        "Use message-digest authentication\n"
@@ -1135,7 +1228,7 @@ DEFUN (ospf_area_vlink,
 	if (argc <= 4) {
 		/* Thats all folks! - BUGS B. strikes again!!!*/
 
-		return ospf_vl_set(ospf, &vl_config);
+		return ospf_vl_set(vty, ospf, &vl_config);
 	}
 
 	if (argv_find(argv, argc, "authentication", &idx)) {
@@ -1158,23 +1251,33 @@ DEFUN (ospf_area_vlink,
 		if (vl_config.crypto_key_id < 0)
 			return CMD_WARNING_CONFIG_FAILED;
 
-		strlcpy(md5_key, argv[idx + 3]->arg, sizeof(md5_key));
-		vl_config.md5_key = md5_key;
+		if (!strcmp(argv[idx + 3]->arg, "101")) {
+		    vl_config.md5_key = argv[idx + 4]->arg;
+		    vl_config.md5_key_is_encrypted = true;
+		} else {
+		    strlcpy(md5_key, argv[idx + 3]->arg, sizeof(md5_key));
+		    vl_config.md5_key = md5_key;
+		}
 	}
 
 	if (argv_find(argv, argc, "authentication-key", &idx)) {
-		strlcpy(auth_key, argv[idx + 1]->arg, sizeof(auth_key));
-		vl_config.auth_key = auth_key;
+		if (!strcmp(argv[idx + 1]->arg, "101")) {
+		    vl_config.auth_key = argv[idx + 2]->arg;
+		    vl_config.auth_key_is_encrypted = true;
+		} else {
+		    strlcpy(auth_key, argv[idx + 1]->arg, sizeof(auth_key));
+		    vl_config.auth_key = auth_key;
+		}
 	}
 
 	/* Action configuration */
 
-	return ospf_vl_set(ospf, &vl_config);
+	return ospf_vl_set(vty, ospf, &vl_config);
 }
 
 DEFUN (no_ospf_area_vlink,
        no_ospf_area_vlink_cmd,
-       "no area <A.B.C.D|(0-4294967295)> virtual-link A.B.C.D [authentication [<message-digest|null>]] [<message-digest-key (1-255) md5 KEY|authentication-key AUTH_KEY>]",
+       "no area <A.B.C.D|(0-4294967295)> virtual-link A.B.C.D [authentication [<message-digest|null>]] [<message-digest-key (1-255) [md5 [101] KEY]|authentication-key [101] [AUTH_KEY]>]",
        NO_STR
        VLINK_HELPSTR_IPADDR
        "Enable authentication on this virtual link\n" \
@@ -1252,7 +1355,7 @@ DEFUN (no_ospf_area_vlink,
 
 	/* Action configuration */
 
-	return ospf_vl_set(ospf, &vl_config);
+	return ospf_vl_set(vty, ospf, &vl_config);
 }
 
 DEFUN (ospf_area_vlink_intervals,
@@ -1298,7 +1401,7 @@ DEFUN (ospf_area_vlink_intervals,
 	}
 
 	/* Action configuration */
-	return ospf_vl_set(ospf, &vl_config);
+	return ospf_vl_set(vty, ospf, &vl_config);
 }
 
 DEFUN (no_ospf_area_vlink_intervals,
@@ -1343,7 +1446,7 @@ DEFUN (no_ospf_area_vlink_intervals,
 	}
 
 	/* Action configuration */
-	return ospf_vl_set(ospf, &vl_config);
+	return ospf_vl_set(vty, ospf, &vl_config);
 }
 
 DEFUN (ospf_area_shortcut,
@@ -6914,17 +7017,20 @@ DEFUN (no_ip_ospf_authentication,
 
 DEFUN (ip_ospf_authentication_key,
        ip_ospf_authentication_key_addr_cmd,
-       "ip ospf authentication-key AUTH_KEY [A.B.C.D]",
+       "ip ospf authentication-key [101] AUTH_KEY [A.B.C.D]",
        "IP Information\n"
        "OSPF interface commands\n"
-       "Authentication password (key)\n"
-       "The OSPF password (key)\n"
+       VLINK_HELPSTR_AUTH_SIMPLE
        "Address of interface\n")
 {
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	int idx = 0;
 	struct in_addr addr;
 	struct ospf_if_params *params;
+	int idx_key = 3;
+	bool is_encrypted = false;
+	char *pPlainText;
+	char *pCryptText;
 
 	params = IF_DEF_PARAMS(ifp);
 
@@ -6939,16 +7045,29 @@ DEFUN (ip_ospf_authentication_key,
 		ospf_if_update_params(ifp, addr);
 	}
 
-	strlcpy((char *)params->auth_simple, argv[3]->arg,
+	if (!strcmp(argv[3]->arg, "101")) {
+	    idx_key = 4;
+	    is_encrypted = true;
+	}
+
+	if (build_passwords(argv[idx_key]->arg, is_encrypted,
+	    &pPlainText, &pCryptText))
+		return CMD_WARNING_CONFIG_FAILED;
+
+	strlcpy((char *)params->auth_simple, pPlainText,
 		sizeof(params->auth_simple));
 	SET_IF_PARAM(params, auth_simple);
+	XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pPlainText);
+
+	XFREE(MTYPE_KEYCRYPT_CIPHER_B64, params->auth_simple_encrypted);
+	params->auth_simple_encrypted = pCryptText;
 
 	return CMD_SUCCESS;
 }
 
 DEFUN_HIDDEN (ospf_authentication_key,
               ospf_authentication_key_cmd,
-              "ospf authentication-key AUTH_KEY [A.B.C.D]",
+              "ospf authentication-key [101] AUTH_KEY [A.B.C.D]",
               "OSPF interface commands\n"
               VLINK_HELPSTR_AUTH_SIMPLE
               "Address of interface\n")
@@ -6958,7 +7077,7 @@ DEFUN_HIDDEN (ospf_authentication_key,
 
 DEFUN (no_ip_ospf_authentication_key,
        no_ip_ospf_authentication_key_authkey_addr_cmd,
-       "no ip ospf authentication-key [AUTH_KEY [A.B.C.D]]",
+       "no ip ospf authentication-key [[101] AUTH_KEY [A.B.C.D]]",
        NO_STR
        "IP Information\n"
        "OSPF interface commands\n"
@@ -6985,6 +7104,7 @@ DEFUN (no_ip_ospf_authentication_key,
 
 	memset(params->auth_simple, 0, OSPF_AUTH_SIMPLE_SIZE);
 	UNSET_IF_PARAM(params, auth_simple);
+	XFREE(MTYPE_KEYCRYPT_CIPHER_B64, params->auth_simple_encrypted);
 
 	if (params != IF_DEF_PARAMS(ifp)) {
 		ospf_free_if_params(ifp, addr);
@@ -6996,7 +7116,7 @@ DEFUN (no_ip_ospf_authentication_key,
 
 DEFUN_HIDDEN (no_ospf_authentication_key,
               no_ospf_authentication_key_authkey_addr_cmd,
-              "no ospf authentication-key [AUTH_KEY [A.B.C.D]]",
+              "no ospf authentication-key [[101] AUTH_KEY [A.B.C.D]]",
               NO_STR
               "OSPF interface commands\n"
               VLINK_HELPSTR_AUTH_SIMPLE
@@ -7007,12 +7127,13 @@ DEFUN_HIDDEN (no_ospf_authentication_key,
 
 DEFUN (ip_ospf_message_digest_key,
        ip_ospf_message_digest_key_cmd,
-       "ip ospf message-digest-key (1-255) md5 KEY [A.B.C.D]",
+       "ip ospf message-digest-key (1-255) md5 [101] KEY [A.B.C.D]",
        "IP Information\n"
        "OSPF interface commands\n"
        "Message digest authentication password (key)\n"
        "Key ID\n"
        "Use MD5 algorithm\n"
+       "Encrypted key follows\n"
        "The OSPF password (key)\n"
        "Address of interface\n")
 {
@@ -7021,12 +7142,18 @@ DEFUN (ip_ospf_message_digest_key,
 	uint8_t key_id;
 	struct in_addr addr;
 	struct ospf_if_params *params;
+	bool is_encrypted = false;
+	char *pPlainText;
+	char *pCryptText;
 
 	params = IF_DEF_PARAMS(ifp);
 	int idx = 0;
 
 	argv_find(argv, argc, "(1-255)", &idx);
 	char *keyid = argv[idx]->arg;
+	if (argv_find(argv, argc, "101", &idx)) {
+	    is_encrypted = true;
+	}
 	argv_find(argv, argc, "KEY", &idx);
 	char *cryptkey = argv[idx]->arg;
 
@@ -7047,9 +7174,13 @@ DEFUN (ip_ospf_message_digest_key,
 		return CMD_WARNING;
 	}
 
+	if (build_passwords(cryptkey, is_encrypted, &pPlainText, &pCryptText))
+		return CMD_WARNING_CONFIG_FAILED;
+
 	ck = ospf_crypt_key_new();
 	ck->key_id = (uint8_t)key_id;
-	strlcpy((char *)ck->auth_key, cryptkey, sizeof(ck->auth_key));
+	strlcpy((char *)ck->auth_key, pPlainText, sizeof(ck->auth_key));
+	ck->auth_key_encrypted = pCryptText;
 
 	ospf_crypt_key_add(params->auth_crypt, ck);
 	SET_IF_PARAM(params, auth_crypt);
@@ -7059,11 +7190,12 @@ DEFUN (ip_ospf_message_digest_key,
 
 DEFUN_HIDDEN (ospf_message_digest_key,
               ospf_message_digest_key_cmd,
-              "ospf message-digest-key (1-255) md5 KEY [A.B.C.D]",
+              "ospf message-digest-key (1-255) md5 [101] KEY [A.B.C.D]",
               "OSPF interface commands\n"
               "Message digest authentication password (key)\n"
               "Key ID\n"
               "Use MD5 algorithm\n"
+               "Encrypted key follows\n"
               "The OSPF password (key)\n"
               "Address of interface\n")
 {
@@ -7072,13 +7204,14 @@ DEFUN_HIDDEN (ospf_message_digest_key,
 
 DEFUN (no_ip_ospf_message_digest_key,
        no_ip_ospf_message_digest_key_cmd,
-       "no ip ospf message-digest-key (1-255) [md5 KEY] [A.B.C.D]",
+       "no ip ospf message-digest-key (1-255) [md5 [101] KEY] [A.B.C.D]",
         NO_STR
        "IP Information\n"
        "OSPF interface commands\n"
        "Message digest authentication password (key)\n"
        "Key ID\n"
        "Use MD5 algorithm\n"
+       "Encrypted key follows\n"
        "The OSPF password (key)\n"
        "Address of interface\n")
 {
@@ -7124,12 +7257,13 @@ DEFUN (no_ip_ospf_message_digest_key,
 
 DEFUN_HIDDEN (no_ospf_message_digest_key,
               no_ospf_message_digest_key_cmd,
-              "no ospf message-digest-key (1-255) [md5 KEY] [A.B.C.D]",
+              "no ospf message-digest-key (1-255) [md5 [101] KEY] [A.B.C.D]",
               NO_STR
               "OSPF interface commands\n"
               "Message digest authentication password (key)\n"
               "Key ID\n"
               "Use MD5 algorithm\n"
+               "Encrypted key follows\n"
               "The OSPF password (key)\n"
               "Address of interface\n")
 {
@@ -9718,6 +9852,173 @@ DEFUN (show_ip_ospf_vrfs,
 	return CMD_SUCCESS;
 }
 
+/* see ospf_config_write_one */
+static void
+ospf_keycrypt_state_change_ospf_one(struct ospf *ospf)
+{
+    {
+	struct listnode *node;
+	struct ospf_vl_data *vl_data;
+
+	/* this part modeled on config_write_virtual_link() */
+	for (ALL_LIST_ELEMENTS_RO(ospf->vlinks, node, vl_data)) {
+            struct listnode *n2;
+            struct crypt_key *ck;
+            struct ospf_if_params *params;
+            char buf[INET_ADDRSTRLEN];
+
+            if (!vl_data)
+                    continue;
+
+            area_id2str(buf, sizeof(buf), &vl_data->vl_area_id,
+                vl_data->vl_area_id_fmt);
+
+            params = IF_DEF_PARAMS(vl_data->vl_oi->ifp);
+
+            /* Auth key */
+            if (params->auth_simple[0]) {
+                XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
+                    params->auth_simple_encrypted);
+                if (keycrypt_encrypt((char *)params->auth_simple,
+                    strlen((char *)params->auth_simple),
+                    &params->auth_simple_encrypted, NULL)) {
+                    zlog_err("%s: can't encrypt simple passwd for "
+                        "ospf instance %u vrf %s "
+                        "area %s virtual-link %s",
+                        __func__, ospf->instance, ospf->name,
+                        buf, inet_ntoa(vl_data->vl_peer));
+                }
+            }
+            /* md5 keys */
+            for (ALL_LIST_ELEMENTS_RO(params->auth_crypt, n2, ck)) {
+
+                XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
+                    ck->auth_key_encrypted);
+
+                if (keycrypt_encrypt((char *)ck->auth_key,
+                    strlen((char *)ck->auth_key),
+                    &ck->auth_key_encrypted, NULL)) {
+
+                    zlog_err("%s: can't encrypt md5 id %d for "
+                        "ospf instance %u vrf %s "
+                        "area %s virtual-link %s",
+                        __func__, ck->key_id,
+                        ospf->instance, ospf->name,
+                        buf, inet_ntoa(vl_data->vl_peer));
+                }
+            }
+        }
+    }
+}
+
+static void
+ospf_keycrypt_state_change_vrf_one(struct vrf *vrf)
+{
+    /* this part based on config_write_interface_one(vty, vrf) */
+
+    struct listnode *node;
+    struct interface *ifp;
+    struct crypt_key *ck;
+
+    FOR_ALL_INTERFACES (vrf, ifp) {
+
+	struct ospf_if_params *params;
+	struct route_node *rn = NULL;
+
+	if (memcmp(ifp->name, "VLINK", 5) == 0)
+		continue;
+
+	params = IF_DEF_PARAMS(ifp);
+
+	do {
+	    /* Simple Authentication Password print. */
+	    if (OSPF_IF_PARAM_CONFIGURED(params, auth_simple)
+		&& params->auth_simple[0] != '\0') {
+
+		XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
+		    params->auth_simple_encrypted);
+		if (keycrypt_encrypt((char *)params->auth_simple,
+		    strlen((char *)params->auth_simple),
+		    &params->auth_simple_encrypted, NULL)) {
+
+		    zlog_err("%s: interface %s vrf %s authentication-key "
+			"%s: can't encrypt",
+			__func__, ifp->name, ((ifp->vrf_id == VRF_DEFAULT)?
+			    "default":
+			    vrf->name),
+			((params != IF_DEF_PARAMS(ifp) && rn)?
+			    inet_ntoa(rn->p.u.prefix4):
+			    "")
+		    );
+		}
+	    }
+
+
+	    /* Cryptographic Authentication Key print. */
+	    if (params && params->auth_crypt) {
+
+		for (ALL_LIST_ELEMENTS_RO(params->auth_crypt, node, ck)) {
+
+		    XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
+			ck->auth_key_encrypted);
+
+		    if (keycrypt_encrypt((char *)ck->auth_key,
+			strlen((char *)ck->auth_key),
+			&ck->auth_key_encrypted, NULL)) {
+
+			zlog_err("%s: interface %s vrf %s "
+			    "message-digest-key %d %s: can't encrypt",
+			    __func__, ifp->name,
+			    ((ifp->vrf_id == VRF_DEFAULT)?
+				"default":
+				vrf->name),
+			    ck->key_id,
+			    ((params != IF_DEF_PARAMS(ifp) && rn)?
+				inet_ntoa(rn->p.u.prefix4):
+				"")
+			);
+		    }
+
+		}
+	    }
+	} while (rn);
+    }
+}
+
+static void
+ospf_keycrypt_state_change(bool now_encrypting)
+{
+    /*
+     * change from encrypting to non-encrypting has no effect on
+     * previously-encrypted protocol keys: they remain encrypted.
+     */
+    if (!now_encrypting)
+	return;
+
+    if (listcount(om->ospf)) {
+
+	struct ospf *ospf;
+	struct listnode *ospf_node = NULL;
+
+	for (ALL_LIST_ELEMENTS_RO(om->ospf, ospf_node, ospf)) {
+		/* VRF Default check if it is running.
+		 * Upon daemon start, there could be default instance
+		 * in absence of 'router ospf'/oi_running is disabled. */
+		if (ospf->vrf_id == VRF_DEFAULT && ospf->oi_running)
+			ospf_keycrypt_state_change_ospf_one(ospf);
+		/* For Non-Default VRF simply display the configuration,
+		 * even if it is not oi_running. */
+		else if (ospf->vrf_id != VRF_DEFAULT)
+			ospf_keycrypt_state_change_ospf_one(ospf);
+	}
+    }
+
+    struct vrf *vrf = NULL;
+    RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+	ospf_keycrypt_state_change_vrf_one(vrf);
+    }
+}
+
 static const char *const ospf_abr_type_str[] = {
 	"unknown", "standard", "ibm", "cisco", "shortcut"
 };
@@ -9818,8 +10119,18 @@ static int config_write_interface_one(struct vty *vty, struct vrf *vrf)
 			/* Simple Authentication Password print. */
 			if (OSPF_IF_PARAM_CONFIGURED(params, auth_simple)
 			    && params->auth_simple[0] != '\0') {
-				vty_out(vty, " ip ospf authentication-key %s",
-					params->auth_simple);
+				const char *pfx;
+                                char *str;
+				if (params->auth_simple_encrypted) {
+				    pfx = "101 ";
+				    str = params->auth_simple_encrypted;
+				} else {
+				    pfx = "";
+				    str = (char *)params->auth_simple;
+				}
+				vty_out(vty,
+					" ip ospf authentication-key %s%s",
+					pfx, str);
 				if (params != IF_DEF_PARAMS(ifp) && rn)
 					vty_out(vty, " %s",
 						inet_ntoa(rn->p.u.prefix4));
@@ -9828,11 +10139,21 @@ static int config_write_interface_one(struct vty *vty, struct vrf *vrf)
 
 			/* Cryptographic Authentication Key print. */
 			if (params && params->auth_crypt) {
+				const char *pfx;
+                                char *str;
 				for (ALL_LIST_ELEMENTS_RO(params->auth_crypt,
 							  node, ck)) {
+					if (ck->auth_key_encrypted) {
+					    pfx = "101 ";
+					    str = ck->auth_key_encrypted;
+					} else {
+					    pfx = "";
+					    str = (char *)ck->auth_key;
+					}
 					vty_out(vty,
-						" ip ospf message-digest-key %d md5 %s",
-						ck->key_id, ck->auth_key);
+						" ip ospf message-digest-key %d md5 %s%s",
+						ck->key_id,
+						pfx, str);
 					if (params != IF_DEF_PARAMS(ifp) && rn)
 						vty_out(vty, " %s",
 							inet_ntoa(
@@ -10192,22 +10513,43 @@ static int config_write_virtual_link(struct vty *vty, struct ospf *ospf)
 					inet_ntoa(vl_data->vl_peer));
 			/* Auth key */
 			if (IF_DEF_PARAMS(vl_data->vl_oi->ifp)->auth_simple[0]
-			    != '\0')
+			    != '\0') {
+				struct ospf_if_params *params;
+				const char *pfx;
+                                char *str;
+				params = IF_DEF_PARAMS(vl_data->vl_oi->ifp);
+				if (params->auth_simple_encrypted) {
+				    pfx = "101 ";
+				    str = params->auth_simple_encrypted;
+				} else {
+				    pfx = "";
+				    str = (char *)params->auth_simple;
+				}
 				vty_out(vty,
-					" area %s virtual-link %s authentication-key %s\n",
+					" area %s virtual-link %s authentication-key %s%s\n",
 					buf, inet_ntoa(vl_data->vl_peer),
-					IF_DEF_PARAMS(vl_data->vl_oi->ifp)
-						->auth_simple);
+					pfx, str);
+			}
 			/* md5 keys */
 			for (ALL_LIST_ELEMENTS_RO(
-				     IF_DEF_PARAMS(vl_data->vl_oi->ifp)
+				    IF_DEF_PARAMS(vl_data->vl_oi->ifp)
 					     ->auth_crypt,
-				     n2, ck))
+				    n2, ck)) {
+                                        const char *pfx;
+					char *str;
+					if (ck->auth_key_encrypted) {
+					    pfx = "101 ";
+					    str = ck->auth_key_encrypted;
+					} else {
+					    pfx = "";
+					    str = (char *)ck->auth_key;
+					}
 				vty_out(vty,
 					" area %s virtual-link %s"
-					" message-digest-key %d md5 %s\n",
+					" message-digest-key %d md5 %s%s\n",
 					buf, inet_ntoa(vl_data->vl_peer),
-					ck->key_id, ck->auth_key);
+					ck->key_id, pfx, str);
+			}
 		}
 	}
 
@@ -10871,4 +11213,6 @@ void ospf_vty_init(void)
 
 	/* Init zebra related vty commands. */
 	ospf_vty_zebra_init();
+
+	keycrypt_register_protocol_callback(ospf_keycrypt_state_change);
 }

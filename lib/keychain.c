@@ -24,6 +24,7 @@
 #include "memory.h"
 #include "linklist.h"
 #include "keychain.h"
+#include "keycrypt.h"
 
 DEFINE_MTYPE_STATIC(LIB, KEY, "Key")
 DEFINE_MTYPE_STATIC(LIB, KEYCHAIN, "Key chain")
@@ -92,6 +93,7 @@ static void key_delete_func(struct key *key)
 {
 	if (key->string)
 		free(key->string);
+        XFREE(MTYPE_KEYCRYPT_CIPHER_B64, key->string_encrypted);
 	key_free(key);
 }
 
@@ -217,6 +219,7 @@ static void key_delete(struct keychain *keychain, struct key *key)
 	listnode_delete(keychain->key, key);
 
 	XFREE(MTYPE_KEY, key->string);
+        XFREE(MTYPE_KEYCRYPT_CIPHER_B64, key->string_encrypted);
 	key_free(key);
 }
 
@@ -303,18 +306,93 @@ DEFUN (no_key,
 	return CMD_SUCCESS;
 }
 
+/*
+ * Do crypto conversions and memory allocations as needed for peer passwords.
+ *
+ * Non-CMD_SUCCESS return values are CLI error values
+ *
+ * If CMD_SUCCESS is returned, caller should use dynamically-allocated
+ * returned pointer values for plain and crypt text.
+ */
+static int
+build_passwords(
+    struct vty *vty,
+    const char *password_in,	/* IN */
+    bool is_encrypted,		/* IN */
+    char **ppPlainText,		/* OUT MTYPE_KEY */
+    char **ppCryptText)		/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
+{
+	*ppCryptText = NULL;
+	char *password;
+
+        if (is_encrypted) {
+#ifdef KEYCRYPT_ENABLED
+                if (keycrypt_decrypt(MTYPE_KEY,
+                        password_in, strlen(password_in),
+                        &password, NULL)) {
+                        vty_out(vty, "Crypto error\n");
+                        return CMD_WARNING_CONFIG_FAILED;
+                }
+#else
+		vty_out(vty, "%s: keycrypt not supported in this build",
+                     __func__);
+		zlog_err("%s: keycrypt not supported in this build", __func__);
+		return CMD_WARNING_CONFIG_FAILED;
+#endif
+        } else {
+		password = XSTRDUP(MTYPE_KEY, password_in);
+        }
+
+#ifdef KEYCRYPT_ENABLED
+	if (keycrypt_is_now_encrypting() || is_encrypted) {
+		if (keycrypt_encrypt(password, strlen(password),
+		    ppCryptText, NULL)) {
+                        XFREE(MTYPE_KEY, password);
+                        vty_out(vty, "Crypto error\n");
+                        return CMD_WARNING_CONFIG_FAILED;
+		}
+        }
+#endif
+
+	*ppPlainText = password;
+
+	return CMD_SUCCESS;
+}
+
 DEFUN (key_string,
        key_string_cmd,
-       "key-string LINE",
+       "key-string [101] LINE",
        "Set key string\n"
+       "Encrypted key follows\n"
        "The key\n")
 {
 	int idx_line = 1;
+        bool is_encrypted = false;
+        char *passwdPlain;
+        char *passwdCrypt;
 	VTY_DECLVAR_CONTEXT_SUB(key, key);
 
-	if (key->string)
-		XFREE(MTYPE_KEY, key->string);
-	key->string = XSTRDUP(MTYPE_KEY, argv[idx_line]->arg);
+        if (argc == 3) {
+                is_encrypted = true;
+                idx_line = 2;
+        }
+
+        int ret = build_passwords(vty, argv[idx_line]->arg, is_encrypted,
+            &passwdPlain, &passwdCrypt);
+        if (ret != CMD_SUCCESS)
+            return ret;
+
+        /*
+         * Free old encrypted password, if any. The way to transition
+         * from an encrypted password to a cleartext password is to
+         * turn off "service password-encryption" and then explicitly
+         * set the password in cleartext.
+         */
+        XFREE(MTYPE_KEYCRYPT_CIPHER_B64, key->string_encrypted);
+        key->string_encrypted = passwdCrypt; /* may be NULL */
+
+        XFREE(MTYPE_KEY, key->string);
+	key->string = passwdPlain;
 
 	return CMD_SUCCESS;
 }
@@ -328,10 +406,8 @@ DEFUN (no_key_string,
 {
 	VTY_DECLVAR_CONTEXT_SUB(key, key);
 
-	if (key->string) {
-		XFREE(MTYPE_KEY, key->string);
-		key->string = NULL;
-	}
+        XFREE(MTYPE_KEY, key->string);
+        XFREE(MTYPE_KEYCRYPT_CIPHER_B64, key->string_encrypted);
 
 	return CMD_SUCCESS;
 }
@@ -501,6 +577,36 @@ static int key_lifetime_infinite_set(struct vty *vty, struct key_range *krange,
 	krange->end = -1;
 
 	return CMD_SUCCESS;
+}
+
+void
+keychain_encryption_state_change(bool now_encrypting)
+{
+    struct keychain *keychain;
+    struct key *key;
+    struct listnode *node;
+    struct listnode *knode;
+
+    /*
+     * change from encrypting to non-encrypting has no effect on
+     * previously-encrypted protocol keys: they remain encrypted.
+     */
+    if (!now_encrypting)
+        return;
+
+    for (ALL_LIST_ELEMENTS_RO(keychain_list, node, keychain)) {
+        for (ALL_LIST_ELEMENTS_RO(keychain->key, knode, key)) {
+            if (key->string) {
+                if (key->string_encrypted)
+                    continue;
+                if (keycrypt_encrypt(key->string, strlen(key->string),
+                    &(key->string_encrypted), NULL)) {
+                        zlog_err("%s: can't encrypt for keychain \"%s\", key \"%u\"",
+                            __func__, keychain->name, key->index);
+                }
+            }
+        }
+    }
 }
 
 DEFUN (accept_lifetime_day_month_day_month,
@@ -991,8 +1097,14 @@ static int keychain_config_write(struct vty *vty)
 		for (ALL_LIST_ELEMENTS_RO(keychain->key, knode, key)) {
 			vty_out(vty, " key %d\n", key->index);
 
-			if (key->string)
-				vty_out(vty, "  key-string %s\n", key->string);
+			if (key->string) {
+                                if (key->string_encrypted)
+                                    vty_out(vty, "  key-string 101 %s\n",
+                                        key->string_encrypted);
+                                else
+                                    vty_out(vty, "  key-string %s\n",
+                                        key->string);
+                        }
 
 			if (key->accept.start) {
 				keychain_strftime(buf, BUFSIZ,
