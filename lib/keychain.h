@@ -47,6 +47,7 @@ struct key {
 	uint32_t index;
 
 	char *string;
+	char *string_encrypted;
 
 	struct key_range send;
 	struct key_range accept;

@@ -633,8 +633,5 @@ keycrypt_state_change(bool now_encrypting)
     if (keycrypt_protocol_callback)
         (*keycrypt_protocol_callback)(now_encrypting);
 
-    printf("*** WRITE ME! keychain_encryption_state_change() \n");
-#if 0
     keychain_encryption_state_change(now_encrypting);
-#endif
 }
