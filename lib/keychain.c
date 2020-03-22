@@ -503,6 +503,13 @@ static int key_lifetime_infinite_set(struct vty *vty, struct key_range *krange,
 	return CMD_SUCCESS;
 }
 
+void
+keychain_encryption_state_change(bool now_encrypting)
+{
+    /* TBD write this code */
+    assert(0);
+}
+
 DEFUN (accept_lifetime_day_month_day_month,
        accept_lifetime_day_month_day_month_cmd,
        "accept-lifetime HH:MM:SS (1-31) MONTH (1993-2035) HH:MM:SS (1-31) MONTH (1993-2035)",
