@@ -95,6 +95,8 @@ struct ospf_if_params {
 	uint8_t auth_simple[OSPF_AUTH_SIMPLE_SIZE + 1]; /* Simple password. */
 	uint8_t auth_simple__config : 1;
 
+        char *auth_simple_encrypted;      /* dynamically allocated */
+
 	DECLARE_IF_PARAM(struct list *,
 			 auth_crypt);     /* List of Auth cryptographic data. */
 	DECLARE_IF_PARAM(int, auth_type); /* OSPF authentication type */
@@ -142,6 +144,7 @@ struct ospf_vl_data {
 struct crypt_key {
 	uint8_t key_id;
 	uint8_t auth_key[OSPF_AUTH_MD5_SIZE + 1];
+        char *auth_key_encrypted;	/* dynamically allocated */
 };
 
 /* OSPF interface structure. */

@@ -19,23 +19,15 @@
 #ifndef _FRR_KEYCRYPT_H
 #define _FRR_KEYCRYPT_H
 
-#ifdef CRYPTO_OPENSSL
-
-#include <openssl/evp.h>
 #include <zebra.h>
 #include <memory.h>
 
 DECLARE_MTYPE(KEYCRYPT_CIPHER_B64)
 DECLARE_MTYPE(KEYCRYPT_PLAIN_TEXT)
 
-typedef enum {
-    KEYCRYPT_FORMAT_ASN1,
-    KEYCRYPT_FORMAT_PEM,
-    KEYCRYPT_FORMAT_PVK,
-} keycrypt_key_format_t;
+#ifdef CRYPTO_OPENSSL
 
-extern char *
-keycrypt_keyfile_path(void);
+#define KEYCRYPT_ENABLED 1
 
 extern void
 keycrypt_base64_encode(const char *pIn, size_t InLen, char **ppOut, size_t *pOutLen);
@@ -43,24 +35,20 @@ keycrypt_base64_encode(const char *pIn, size_t InLen, char **ppOut, size_t *pOut
 extern void
 keycrypt_base64_decode(const char *pIn, size_t InLen, char **ppOut, size_t *pOutLen);
 
-extern EVP_PKEY *
-keycrypt_read_keyfile(char *path, keycrypt_key_format_t format);
-
 extern int
 keycrypt_encrypt(
-    const char		*pPlainText,	/* IN */
-    size_t		PlainTextLen,	/* IN */
-    char		**ppCipherText,	/* OUT */
-    size_t		*pCipherTextLen);/* OUT */
+    const char		*pPlainText,		/* IN */
+    size_t		PlainTextLen,		/* IN */
+    char		**ppCipherText,		/* OUT */
+    size_t		*pCipherTextLen);	/* OUT */
 
 extern int
 keycrypt_decrypt(
-    const char		*pCipherText,	/* IN */
-    size_t		CipherTextLen,	/* IN */
-    char		**pPlainText,	/* OUT */
-    size_t		*pPlainTextLen);/* OUT */
-
-#endif /* CRYPTO_OPENSSL */
+    struct memtype	*mt, /* of PlainText */	/* IN */
+    const char		*pCipherText,		/* IN */
+    size_t		CipherTextLen,		/* IN */
+    char		**pPlainText,		/* OUT */
+    size_t		*pPlainTextLen);	/* OUT */
 
 extern void keycrypt_init(void);
 
@@ -74,5 +62,8 @@ keycrypt_is_now_encrypting(void);
 
 void
 keycrypt_state_change(bool now_encrypting);
+
+#endif /* CRYPTO_OPENSSL */
+
 
 #endif /* _FRR_KEYCRYPT_H */

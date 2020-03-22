@@ -29,6 +29,7 @@
 #include "routemap.h"
 #include "northbound.h"
 #include "libfrr.h"
+#include "keycrypt.h"
 
 #include "ripd/ripd.h"
 #include "ripd/rip_nb.h"
@@ -1023,6 +1024,59 @@ int lib_interface_rip_authentication_scheme_md5_auth_length_destroy(
 }
 
 /*
+ * Returns 0 on success. On successful return, caller must free
+ * dynamically-allocated *ppPlainText, *ppCryptText if any.
+ */
+static int
+build_passwords(
+    const char *password_in,	/* IN */
+    bool is_encrypted,		/* IN */
+    char **ppPlainText,		/* OUT MTYPE_RIP_INTERFACE_STRING */
+    char **ppCryptText)		/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
+{
+	*ppCryptText = NULL;
+	char *password;
+	struct memtype *mt = MTYPE_RIP_INTERFACE_STRING;
+
+        if (is_encrypted) {
+#ifdef KEYCRYPT_ENABLED
+                if (keycrypt_decrypt(mt,
+                        password_in, strlen(password_in),
+                        &password, NULL)) {
+                        zlog_err("%s: keycrypt_decrypt failed", __func__);
+                        return -1;
+                }
+#else
+		zlog_err("%s: keycrypt not supported in this build", __func__);
+		return -1;
+#endif
+        } else {
+		password = XSTRDUP(mt, password_in);
+        }
+
+#ifdef KEYCRYPT_ENABLED
+	if (keycrypt_is_now_encrypting() || is_encrypted) {
+		if (keycrypt_encrypt(password, strlen(password),
+		    ppCryptText, NULL)) {
+                        zlog_err("%s: keycrypt_encrypt failed", __func__);
+                        XFREE(mt, password);
+                        return -1;
+		}
+        }
+#endif
+
+	*ppPlainText = password;
+
+	return 0;
+}
+
+struct tmp_rip_auth_password_strings {
+    char	*pPlainText;
+    char	*pCryptText;
+};
+DEFINE_MTYPE_STATIC(RIPD, TMP_AUTH_PASSWORD_STRINGS, "provisional NB password strings");
+
+/*
  * XPath: /frr-interface:lib/interface/frr-ripd:rip/authentication-password
  */
 int lib_interface_rip_authentication_password_modify(
@@ -1031,15 +1085,91 @@ int lib_interface_rip_authentication_password_modify(
 {
 	struct interface *ifp;
 	struct rip_interface *ri;
+        const char *password_in;
+        bool is_encrypted = false;
+        char *pPlainText;
+        char *pCryptText;
+        size_t pwlen;
+        struct tmp_rip_auth_password_strings *pwstrs;
 
-	if (event != NB_EV_APPLY)
-		return NB_OK;
+        password_in = yang_dnode_get_string(dnode, NULL);
+
+        switch (event) {
+        case NB_EV_VALIDATE:
+            if (!strncmp(password_in, "101 ", 4)) {	/* hack! */
+                is_encrypted = true;
+                password_in = password_in + 4;
+            }
+
+            if (build_passwords(password_in, is_encrypted,
+                &pPlainText, &pCryptText)) {
+                zlog_err("%s: build_passwords failed", __func__);
+                return NB_ERR_VALIDATION;
+            }
+
+            if (is_encrypted) {
+                pwlen = strlen(pPlainText);
+            } else {
+                pwlen = strlen(password_in);
+            }
+            XFREE(MTYPE_RIP_INTERFACE_STRING, pPlainText);
+            XFREE(MTYPE_KEYCRYPT_CIPHER_B64, pCryptText);
+            if ((pwlen < 1) || (pwlen > 16)) {
+                zlog_err("%s: plaintext password length %lu not in range 1-16",
+                    __func__, pwlen);
+                return NB_ERR_VALIDATION;
+            }
+
+            return NB_OK;
+
+        case NB_EV_PREPARE:
+            if (!strncmp(password_in, "101 ", 4)) {	/* hack! */
+                is_encrypted = true;
+                password_in = password_in + 4;
+            }
+
+            /*
+             * resource is not allocated until "prepare" phase,
+             * so let's do decryption/encryption again as needed
+             * and save the result. This way we can avoid failing
+             * in the "apply" phase.
+             */
+            if (build_passwords(password_in, is_encrypted,
+                &pPlainText, &pCryptText)) {
+                zlog_err("%s: build_passwords failed", __func__);
+                return NB_ERR_VALIDATION;
+            }
+
+            pwstrs = XCALLOC(MTYPE_TMP_AUTH_PASSWORD_STRINGS,
+                sizeof(struct tmp_rip_auth_password_strings));
+            resource->ptr = pwstrs;
+            pwstrs->pPlainText = pPlainText;
+            pwstrs->pCryptText = pCryptText;
+
+            return NB_OK;
+
+        case NB_EV_ABORT:
+            pwstrs = resource->ptr;
+            XFREE(MTYPE_RIP_INTERFACE_STRING, pwstrs->pPlainText);
+            XFREE(MTYPE_KEYCRYPT_CIPHER_B64, pwstrs->pCryptText);
+            XFREE(MTYPE_TMP_AUTH_PASSWORD_STRINGS, resource->ptr);
+            return NB_OK;
+
+        case NB_EV_APPLY:
+            /* fall through */
+            break;
+        }
+
 
 	ifp = nb_running_get_entry(dnode, NULL, true);
 	ri = ifp->info;
 	XFREE(MTYPE_RIP_INTERFACE_STRING, ri->auth_str);
-	ri->auth_str = XSTRDUP(MTYPE_RIP_INTERFACE_STRING,
-			       yang_dnode_get_string(dnode, NULL));
+        XFREE(MTYPE_KEYCRYPT_CIPHER_B64, ri->auth_str_encrypted);
+
+        pwstrs = resource->ptr;
+
+        ri->auth_str = pwstrs->pPlainText;
+        ri->auth_str_encrypted = pwstrs->pCryptText; /* may be NULL */
 
 	return NB_OK;
 }
@@ -1056,6 +1186,7 @@ int lib_interface_rip_authentication_password_destroy(
 	ifp = nb_running_get_entry(dnode, NULL, true);
 	ri = ifp->info;
 	XFREE(MTYPE_RIP_INTERFACE_STRING, ri->auth_str);
+        XFREE(MTYPE_KEYCRYPT_CIPHER_B64, ri->auth_str_encrypted);
 
 	return NB_OK;
 }
