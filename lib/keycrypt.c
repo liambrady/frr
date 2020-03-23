@@ -42,6 +42,12 @@ DEFINE_MTYPE_STATIC(LIB, KEYCRYPT_KEYFILE_PATH, "keycrypt keyfile path")
 DEFINE_MTYPE_STATIC(LIB, KEYCRYPT_CIPHER_TEXT, "keycrypt cipher text")
 DEFINE_MTYPE_STATIC(LIB, KEYCRYPT_B64DEC, "keycrypt base64 decoded")
 
+typedef enum {
+    KEYCRYPT_FORMAT_ASN1,
+    KEYCRYPT_FORMAT_PEM,
+    KEYCRYPT_FORMAT_PVK,
+} keycrypt_key_format_t;
+
 /*
  * TBD: validate permissions on keyfile path
  */
@@ -53,7 +59,7 @@ DEFINE_MTYPE_STATIC(LIB, KEYCRYPT_B64DEC, "keycrypt base64 decoded")
  *
  * Return value is NULL on failure.
  */
-char *
+static char *
 keycrypt_keyfile_path(void)
 {
     /*
@@ -86,6 +92,7 @@ keycrypt_keyfile_path(void)
 /*
  * To generate a suitable private key, use:
  *
+ *      chmod 0700 .ssh
  *      openssl genpkey -algorithm RSA -out .ssh/frr
  *      chmod 0400 .ssh/frr
  *
@@ -96,7 +103,7 @@ keycrypt_keyfile_path(void)
  *  1. It contains both the private and public keys
  *  2. We need to be able to decrypt and encrypt
  */
-EVP_PKEY *
+static EVP_PKEY *
 keycrypt_read_keyfile(char *path, keycrypt_key_format_t format)
 {
     FILE	*fp;
@@ -439,6 +446,7 @@ keycrypt_encrypt(
 
 int
 keycrypt_decrypt(
+    struct memtype	*mt,/* of PlainText */	/* IN */
     const char		*pCipherTextB64,	/* IN */
     size_t		CipherTextB64Len,	/* IN */
     char		**ppPlainText,		/* OUT */
@@ -457,7 +465,7 @@ keycrypt_decrypt(
     keycrypt_base64_decode(pCipherTextB64, CipherTextB64Len,
         &pCipherTextRaw, &CipherTextRawLen);
 
-    rc = keycrypt_decrypt_internal(pKey, MTYPE_KEYCRYPT_PLAIN_TEXT,
+    rc = keycrypt_decrypt_internal(pKey, mt,
         pCipherTextRaw, CipherTextRawLen,
         ppPlainText, &PlainTextLen);
 

@@ -5477,6 +5477,66 @@ int peer_local_as_unset(struct peer *peer)
 	return 0;
 }
 
+/*
+ * Do crypto conversions and memory allocations as needed for peer passwords.
+ *
+ * Non-BGP_SUCCESS return values are CLI error values
+ *
+ * If BGP_SUCCESS is returned, caller should use dynamically-allocated
+ * returned pointer values for plain and crypt text.
+ */
+static int
+build_passwords(
+    const char *password_in,	/* IN */
+    bool is_encrypted,		/* IN */
+    char **ppPlainText,		/* OUT MTYPE_PEER_PASSWORD */
+    char **ppCryptText)		/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
+{
+	*ppCryptText = NULL;
+	char *password;
+
+        if (is_encrypted) {
+#ifdef KEYCRYPT_ENABLED
+                if (keycrypt_decrypt(MTYPE_PEER_PASSWORD,
+			password_in, strlen(password_in),
+                        &password, NULL)) {
+                        return BGP_ERR_CRYPTO_FAILED;
+                }
+#else
+		zlog_err("%s: keycrypt not supported in this build", __func__);
+		return BGP_ERR_CRYPTO_FAILED;
+#endif
+        } else {
+		password = XSTRDUP(MTYPE_PEER_PASSWORD, password_in);
+        }
+
+        /* length test must be done on the cleartext */
+        int len = password ? strlen(password) : 0;
+	if ((len < PEER_PASSWORD_MINLEN) || (len > PEER_PASSWORD_MAXLEN)) {
+                XFREE(MTYPE_PEER_PASSWORD, password);
+		return BGP_ERR_INVALID_VALUE;
+        }
+
+#ifdef KEYCRYPT_ENABLED
+	/*
+	 * Could simplify by using already-encrypted input if given, but
+	 * always re-encrypting might enable us to take advantage of
+	 * potential future compatibility features.
+	 */
+	if (keycrypt_is_now_encrypting() || is_encrypted) {
+		if (keycrypt_encrypt(password, strlen(password),
+		    ppCryptText, NULL)) {
+                        XFREE(MTYPE_PEER_PASSWORD, password);
+                        return BGP_ERR_CRYPTO_FAILED;
+		}
+        }
+#endif
+
+	*ppPlainText = password;
+
+	return BGP_SUCCESS;
+}
+
 /* Set password for authenticating with the peer. */
 int peer_password_set(
     struct peer *peer,
@@ -5485,35 +5545,16 @@ int peer_password_set(
 {
 	struct peer *member;
 	struct listnode *node, *nnode;
-	int ret = BGP_SUCCESS;
-        const char *password = NULL;		/* cleartext */
-	char *password_encrypted_b64 = NULL;
-	char *password_cleartext = NULL;
+	int ret;
+        const char *password;
 
-        if (is_encrypted) {
-                if (keycrypt_decrypt(password_in, strlen(password_in),
-                        &password_cleartext, NULL)) {
-                        return BGP_ERR_CRYPTO_FAILED;
-                }
-		password = password_cleartext;
-        } else {
-                password = password_in;
-        }
+	char *passwdPlain;
+	char *passwdCrypt;
 
-        /* length test must be done on the cleartext */
-        int len = password ? strlen(password) : 0;
-	if ((len < PEER_PASSWORD_MINLEN) || (len > PEER_PASSWORD_MAXLEN)) {
-                XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, password_cleartext);
-		return BGP_ERR_INVALID_VALUE;
-        }
-
-	if (keycrypt_is_now_encrypting() || is_encrypted) {
-		if (keycrypt_encrypt(password, strlen(password),
-		    &password_encrypted_b64, NULL)) {
-                        XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, password_cleartext);
-                        return BGP_ERR_CRYPTO_FAILED;
-		}
-        }
+	ret = build_passwords(password_in, is_encrypted,
+	    &passwdPlain, &passwdCrypt);
+	if (ret != BGP_SUCCESS)
+	    return ret;
 
 	/* Set flag and configuration on peer. */
 	peer_flag_set(peer, PEER_FLAG_PASSWORD);
@@ -5525,19 +5566,18 @@ int peer_password_set(
          * set the password in cleartext.
          */
         XFREE(MTYPE_KEYCRYPT_CIPHER_B64, peer->password_encrypted);
-
-        if (password_encrypted_b64) {
-            peer->password_encrypted = password_encrypted_b64;
-        }
-
-	if (peer->password && strcmp(peer->password, password) == 0) {
-                XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, password_cleartext);
-		return 0;
-        }
+	peer->password_encrypted = passwdCrypt; /* may be NULL */
 
 	XFREE(MTYPE_PEER_PASSWORD, peer->password);
-	peer->password = XSTRDUP(MTYPE_PEER_PASSWORD, password);
-        XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, password_cleartext);
+	peer->password = passwdPlain;
+
+	password = passwdPlain;	/* tmp ref to dynamic space */
+
+	/*
+	 * no change to cleartext version of password - we are done
+	 */
+	if (peer->password && strcmp(peer->password, password) == 0)
+	    return BGP_SUCCESS;
 
 	/* Check if handling a regular peer. */
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {

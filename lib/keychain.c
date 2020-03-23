@@ -306,6 +306,59 @@ DEFUN (no_key,
 	return CMD_SUCCESS;
 }
 
+/*
+ * Do crypto conversions and memory allocations as needed for peer passwords.
+ *
+ * Non-CMD_SUCCESS return values are CLI error values
+ *
+ * If CMD_SUCCESS is returned, caller should use dynamically-allocated
+ * returned pointer values for plain and crypt text.
+ */
+static int
+build_passwords(
+    struct vty *vty,
+    const char *password_in,	/* IN */
+    bool is_encrypted,		/* IN */
+    char **ppPlainText,		/* OUT MTYPE_KEY */
+    char **ppCryptText)		/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
+{
+	*ppCryptText = NULL;
+	char *password;
+
+        if (is_encrypted) {
+#ifdef KEYCRYPT_ENABLED
+                if (keycrypt_decrypt(MTYPE_KEY,
+                        password_in, strlen(password_in),
+                        &password, NULL)) {
+                        vty_out(vty, "Crypto error\n");
+                        return CMD_WARNING_CONFIG_FAILED;
+                }
+#else
+		vty_out(vty, "%s: keycrypt not supported in this build",
+                     __func__);
+		zlog_err("%s: keycrypt not supported in this build", __func__);
+		return CMD_WARNING_CONFIG_FAILED;
+#endif
+        } else {
+		password = XSTRDUP(MTYPE_KEY, password_in);
+        }
+
+#ifdef KEYCRYPT_ENABLED
+	if (keycrypt_is_now_encrypting() || is_encrypted) {
+		if (keycrypt_encrypt(password, strlen(password),
+		    ppCryptText, NULL)) {
+                        XFREE(MTYPE_KEY, password);
+                        vty_out(vty, "Crypto error\n");
+                        return CMD_WARNING_CONFIG_FAILED;
+		}
+        }
+#endif
+
+	*ppPlainText = password;
+
+	return CMD_SUCCESS;
+}
+
 DEFUN (key_string,
        key_string_cmd,
        "key-string [101] LINE",
@@ -315,38 +368,19 @@ DEFUN (key_string,
 {
 	int idx_line = 1;
         bool is_encrypted = false;
-        const char *key_cleartext = NULL;		/* cleartext */
-        char *key_encrypted_b64 = NULL;
-        char *key_decrypted = NULL;
-        char *key_in;
+        char *passwdPlain;
+        char *passwdCrypt;
 	VTY_DECLVAR_CONTEXT_SUB(key, key);
 
         if (argc == 3) {
                 is_encrypted = true;
                 idx_line = 2;
         }
-        key_in = argv[idx_line]->arg;
 
-        if (is_encrypted) {
-                if (keycrypt_decrypt(key_in, strlen(key_in),
-                        &key_decrypted, NULL)) {
-
-                        vty_out(vty, "Crypto error\n");
-                        return CMD_WARNING_CONFIG_FAILED;
-                }
-                key_cleartext = key_decrypted;
-        } else {
-                key_cleartext = key_in;
-        }
-
-        if (keycrypt_is_now_encrypting() || is_encrypted) {
-                if (keycrypt_encrypt(key_cleartext, strlen(key_cleartext),
-                        &key_encrypted_b64, NULL)) {
-                                XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, key_decrypted);
-                                vty_out(vty, "Crypto error\n");
-                                return CMD_WARNING_CONFIG_FAILED;
-                }
-        }
+        int ret = build_passwords(vty, argv[idx_line]->arg, is_encrypted,
+            &passwdPlain, &passwdCrypt);
+        if (ret != CMD_SUCCESS)
+            return ret;
 
         /*
          * Free old encrypted password, if any. The way to transition
@@ -355,14 +389,10 @@ DEFUN (key_string,
          * set the password in cleartext.
          */
         XFREE(MTYPE_KEYCRYPT_CIPHER_B64, key->string_encrypted);
+        key->string_encrypted = passwdCrypt; /* may be NULL */
 
-        if (key_encrypted_b64)
-                key->string_encrypted = key_encrypted_b64;
-
-	if (key->string)
-		XFREE(MTYPE_KEY, key->string);
-	key->string = XSTRDUP(MTYPE_KEY, key_cleartext);
-        XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, key_decrypted);
+        XFREE(MTYPE_KEY, key->string);
+	key->string = passwdPlain;
 
 	return CMD_SUCCESS;
 }
@@ -376,10 +406,7 @@ DEFUN (no_key_string,
 {
 	VTY_DECLVAR_CONTEXT_SUB(key, key);
 
-	if (key->string) {
-		XFREE(MTYPE_KEY, key->string);
-		key->string = NULL;
-	}
+        XFREE(MTYPE_KEY, key->string);
         XFREE(MTYPE_KEYCRYPT_CIPHER_B64, key->string_encrypted);
 
 	return CMD_SUCCESS;
