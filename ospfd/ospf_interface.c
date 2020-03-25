@@ -32,6 +32,7 @@
 #include "log.h"
 #include "zclient.h"
 #include "bfd.h"
+#include "keycrypt.h"
 
 #include "ospfd/ospfd.h"
 #include "ospfd/ospf_spf.h"
@@ -1205,6 +1206,8 @@ int ospf_crypt_key_delete(struct list *auth_crypt, uint8_t key_id)
 
 	for (ALL_LIST_ELEMENTS(auth_crypt, node, nnode, ck)) {
 		if (ck->key_id == key_id) {
+                        XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
+                            ck->auth_key_encrypted);
 			listnode_delete(auth_crypt, ck);
 			XFREE(MTYPE_OSPF_CRYPT_KEY, ck);
 			return 1;
