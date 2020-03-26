@@ -7133,6 +7133,7 @@ DEFUN (ip_ospf_message_digest_key,
        "Message digest authentication password (key)\n"
        "Key ID\n"
        "Use MD5 algorithm\n"
+       "Encrypted key follows\n"
        "The OSPF password (key)\n"
        "Address of interface\n")
 {
@@ -7194,6 +7195,7 @@ DEFUN_HIDDEN (ospf_message_digest_key,
               "Message digest authentication password (key)\n"
               "Key ID\n"
               "Use MD5 algorithm\n"
+               "Encrypted key follows\n"
               "The OSPF password (key)\n"
               "Address of interface\n")
 {
@@ -7209,6 +7211,7 @@ DEFUN (no_ip_ospf_message_digest_key,
        "Message digest authentication password (key)\n"
        "Key ID\n"
        "Use MD5 algorithm\n"
+       "Encrypted key follows\n"
        "The OSPF password (key)\n"
        "Address of interface\n")
 {
@@ -7260,6 +7263,7 @@ DEFUN_HIDDEN (no_ospf_message_digest_key,
               "Message digest authentication password (key)\n"
               "Key ID\n"
               "Use MD5 algorithm\n"
+               "Encrypted key follows\n"
               "The OSPF password (key)\n"
               "Address of interface\n")
 {
