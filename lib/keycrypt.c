@@ -638,6 +638,8 @@ keycrypt_state_change(bool now_encrypting)
     if (now_encrypting == keycrypt_now_encrypting)
         return;
 
+    keycrypt_now_encrypting = now_encrypting;
+
     if (keycrypt_protocol_callback)
         (*keycrypt_protocol_callback)(now_encrypting);
 
