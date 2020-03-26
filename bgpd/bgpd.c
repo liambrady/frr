@@ -7241,10 +7241,6 @@ void bgp_init(unsigned short instance)
 	/* BFD init */
 	bgp_bfd_init();
 
-#ifdef CRYPTO_OPENSSL
-        keycrypt_init();
-#endif
-
 	cmd_variable_handler_register(bgp_viewvrf_var_handlers);
 
 	keycrypt_register_protocol_callback(bgp_keycrypt_state_change);

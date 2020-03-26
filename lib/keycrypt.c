@@ -480,6 +480,7 @@ keycrypt_decrypt(
     return 0;
 }
 
+#if 0 /* can't figure out how to make this hidden and not show up in vtysh */
 
 DEFUN_HIDDEN (debug_keycrypt_test,
        debug_keycrypt_test_cmd,
@@ -611,10 +612,14 @@ DEFUN_HIDDEN (debug_keycrypt_test,
     return CMD_SUCCESS;
 }
 
+#endif /* 0 */
+
 void
 keycrypt_init(void)
 {
+#if 0
     install_element(VIEW_NODE, &debug_keycrypt_test_cmd);
+#endif
 }
 
 static bool			keycrypt_now_encrypting = false;
