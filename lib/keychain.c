@@ -582,6 +582,7 @@ static int key_lifetime_infinite_set(struct vty *vty, struct key_range *krange,
 void
 keychain_encryption_state_change(bool now_encrypting)
 {
+#ifdef KEYCRYPT_ENABLED
     struct keychain *keychain;
     struct key *key;
     struct listnode *node;
@@ -607,6 +608,7 @@ keychain_encryption_state_change(bool now_encrypting)
             }
         }
     }
+#endif
 }
 
 DEFUN (accept_lifetime_day_month_day_month,

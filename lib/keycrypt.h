@@ -35,20 +35,7 @@ keycrypt_base64_encode(const char *pIn, size_t InLen, char **ppOut, size_t *pOut
 extern void
 keycrypt_base64_decode(const char *pIn, size_t InLen, char **ppOut, size_t *pOutLen);
 
-extern int
-keycrypt_encrypt(
-    const char		*pPlainText,		/* IN */
-    size_t		PlainTextLen,		/* IN */
-    char		**ppCipherText,		/* OUT */
-    size_t		*pCipherTextLen);	/* OUT */
-
-extern int
-keycrypt_decrypt(
-    struct memtype	*mt, /* of PlainText */	/* IN */
-    const char		*pCipherText,		/* IN */
-    size_t		CipherTextLen,		/* IN */
-    char		**pPlainText,		/* OUT */
-    size_t		*pPlainTextLen);	/* OUT */
+#endif /* CRYPTO_OPENSSL */
 
 extern void keycrypt_init(void);
 
@@ -63,7 +50,20 @@ keycrypt_is_now_encrypting(void);
 void
 keycrypt_state_change(bool now_encrypting);
 
-#endif /* CRYPTO_OPENSSL */
+extern int
+keycrypt_encrypt(
+    const char		*pPlainText,		/* IN */
+    size_t		PlainTextLen,		/* IN */
+    char		**ppCipherText,		/* OUT */
+    size_t		*pCipherTextLen);	/* OUT */
+
+extern int
+keycrypt_decrypt(
+    struct memtype	*mt, /* of PlainText */	/* IN */
+    const char		*pCipherText,		/* IN */
+    size_t		CipherTextLen,		/* IN */
+    char		**pPlainText,		/* OUT */
+    size_t		*pPlainTextLen);	/* OUT */
 
 
 #endif /* _FRR_KEYCRYPT_H */

@@ -24,6 +24,9 @@
 #include "command.h"
 #include "keychain.h"
 
+DEFINE_MTYPE(LIB, KEYCRYPT_CIPHER_B64, "keycrypt base64 encoded")
+DEFINE_MTYPE(LIB, KEYCRYPT_PLAIN_TEXT, "keycrypt plain text")
+
 #ifdef CRYPTO_OPENSSL
 
 #include <openssl/bio.h>
@@ -34,9 +37,6 @@
 
 #define KEYFILE_NAME_PRIVATE	".ssh/frr"
 #define PWENT_BUFSIZE	512
-
-DEFINE_MTYPE(LIB, KEYCRYPT_CIPHER_B64, "keycrypt base64 encoded")
-DEFINE_MTYPE(LIB, KEYCRYPT_PLAIN_TEXT, "keycrypt plain text")
 
 DEFINE_MTYPE_STATIC(LIB, KEYCRYPT_KEYFILE_PATH, "keycrypt keyfile path")
 DEFINE_MTYPE_STATIC(LIB, KEYCRYPT_CIPHER_TEXT, "keycrypt cipher text")
@@ -362,7 +362,6 @@ keycrypt_decrypt_internal(
 
     return 0;
 }
-#endif /* CRYPTO_OPENSSL */
 
 static EVP_PKEY *keycrypt_cached_pkey;
 static time_t	keycrypt_pkey_check_time;
@@ -406,6 +405,9 @@ end:
     return keycrypt_cached_pkey;
 }
 
+#endif /* CRYPTO_OPENSSL */
+
+
 /*
  * After successful return (0), caller MUST free base-64 encoded
  * cipher text via XFREE(MTYPE_KEYCRYPT_CIPHER_B64, ptr)
@@ -417,6 +419,7 @@ keycrypt_encrypt(
     char		**ppCipherTextB64,	/* OUT */
     size_t		*pCipherTextB64Len)	/* OUT */
 {
+#ifdef CRYPTO_OPENSSL
     EVP_PKEY	*pKey;
     int		rc;
     char	*pCipherTextRaw;
@@ -442,6 +445,11 @@ keycrypt_encrypt(
     XFREE(MTYPE_KEYCRYPT_CIPHER_TEXT, pCipherTextRaw);
 
     return 0;
+#else
+    zlog_err("%s: CRYPTO_OPENSSL not defined: keycrypt not available",
+        __func__);
+    return -1;
+#endif
 }
 
 int
@@ -452,6 +460,7 @@ keycrypt_decrypt(
     char		**ppPlainText,		/* OUT */
     size_t		*pPlainTextLen)		/* OUT */
 {
+#ifdef CRYPTO_OPENSSL
     EVP_PKEY	*pKey;
     int		rc;
     char	*pCipherTextRaw;
@@ -478,6 +487,11 @@ keycrypt_decrypt(
         *pPlainTextLen = PlainTextLen;
 
     return 0;
+#else
+    zlog_err("%s: CRYPTO_OPENSSL not defined: keycrypt not available",
+        __func__);
+    return -1;
+#endif
 }
 
 #if 0 /* can't figure out how to make this hidden and not show up in vtysh */
