@@ -5553,16 +5553,18 @@ int peer_password_set(
         XFREE(MTYPE_KEYCRYPT_CIPHER_B64, peer->password_encrypted);
 	peer->password_encrypted = passwdCrypt; /* may be NULL */
 
-	XFREE(MTYPE_PEER_PASSWORD, peer->password);
-	peer->password = passwdPlain;
-
 	password = passwdPlain;	/* tmp ref to dynamic space */
 
 	/*
 	 * no change to cleartext version of password - we are done
 	 */
-	if (peer->password && strcmp(peer->password, password) == 0)
+	if (peer->password && strcmp(peer->password, password) == 0) {
+            XFREE(MTYPE_PEER_PASSWORD, passwdPlain);
 	    return BGP_SUCCESS;
+        }
+
+	XFREE(MTYPE_PEER_PASSWORD, peer->password);
+	peer->password = passwdPlain;
 
 	/* Check if handling a regular peer. */
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
