@@ -40,9 +40,14 @@ keycrypt_base64_decode(const char *pIn, size_t InLen, char **ppOut, size_t *pOut
 extern void keycrypt_init(void);
 
 typedef void(keycrypt_callback_t)(bool);
+struct vty; /* pet compiler for next line */
+typedef void(keycrypt_show_callback_t)(struct vty *, const char *);
 
 void
-keycrypt_register_protocol_callback(keycrypt_callback_t kcb);
+keycrypt_register_protocol_callback(keycrypt_callback_t *kcb);
+
+void
+keycrypt_register_protocol_show_callback(keycrypt_show_callback_t *kcb);
 
 bool
 keycrypt_is_now_encrypting(void);

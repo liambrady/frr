@@ -62,6 +62,8 @@ extern struct key *key_lookup_for_accept(const struct keychain *, uint32_t);
 extern struct key *key_match_for_accept(const struct keychain *, const char *);
 extern struct key *key_lookup_for_send(const struct keychain *);
 extern void keychain_encryption_state_change(bool now_encrypting);
+struct vty; /* pet compiler */
+extern void keychain_encryption_show_status(struct vty *, const char *);
 
 #ifdef __cplusplus
 }

@@ -494,8 +494,6 @@ keycrypt_decrypt(
 #endif
 }
 
-#if 0 /* can't figure out how to make this hidden and not show up in vtysh */
-
 DEFUN_HIDDEN (debug_keycrypt_test,
        debug_keycrypt_test_cmd,
        "debug keycrypt-test STRING",
@@ -626,18 +624,9 @@ DEFUN_HIDDEN (debug_keycrypt_test,
     return CMD_SUCCESS;
 }
 
-#endif /* 0 */
-
-void
-keycrypt_init(void)
-{
-#if 0
-    install_element(VIEW_NODE, &debug_keycrypt_test_cmd);
-#endif
-}
-
 static bool			keycrypt_now_encrypting = false;
 static keycrypt_callback_t	*keycrypt_protocol_callback = NULL;
+static keycrypt_show_callback_t	*keycrypt_protocol_show_callback = NULL;
 
 void
 keycrypt_register_protocol_callback(keycrypt_callback_t *kcb)
@@ -664,3 +653,50 @@ keycrypt_state_change(bool now_encrypting)
 
     keychain_encryption_state_change(now_encrypting);
 }
+
+static void
+keycrypt_show_status_internal(struct vty *vty)
+{
+    const char *indentstr = "  ";
+    const char *status;
+
+#ifdef KEYCRYPT_ENABLED
+    status = keycrypt_now_encrypting? "ON": "off";
+#else
+    status = "not included in software build";
+#endif
+    vty_out(vty, "Keycrypt status: %s\n", status);
+
+#ifdef KEYCRYPT_ENABLED
+    keychain_encryption_show_status(vty, indentstr);
+
+    if (keycrypt_protocol_show_callback) {
+        (*keycrypt_protocol_show_callback)(vty, indentstr);
+    }
+#endif
+}
+
+void
+keycrypt_register_protocol_show_callback(keycrypt_show_callback_t *kcb)
+{
+    keycrypt_protocol_show_callback = kcb;
+}
+
+DEFUN (keycrypt_show_status,
+       keycrypt_show_status_cmd,
+       "show keycrypt status",
+       "Show command\n"
+       "keycrypt protocol key encryption\n"
+       "status\n")
+{
+    keycrypt_show_status_internal(vty);
+    return CMD_SUCCESS;
+}
+
+void
+keycrypt_init(void)
+{
+    install_element(VIEW_NODE, &debug_keycrypt_test_cmd);
+    install_element(VIEW_NODE, &keycrypt_show_status_cmd);
+}
+

@@ -595,6 +595,13 @@ keychain_encryption_state_change(bool now_encrypting)
     if (!now_encrypting)
         return;
 
+    /*
+     * Some deamons don't use the keychain. Detect this case and
+     * skip.
+     */
+    if (!keychain_list)
+        return;
+
     for (ALL_LIST_ELEMENTS_RO(keychain_list, node, keychain)) {
         for (ALL_LIST_ELEMENTS_RO(keychain->key, knode, key)) {
             if (key->string) {
@@ -609,6 +616,40 @@ keychain_encryption_state_change(bool now_encrypting)
         }
     }
 #endif
+}
+
+void
+keychain_encryption_show_status(struct vty *vty, const char *indentstr)
+{
+    struct keychain *keychain;
+    struct key *key;
+    struct listnode *node;
+    struct listnode *knode;
+
+    uint keys = 0;
+    uint keys_encrypted = 0;
+
+    /*
+     * Some deamons don't use the keychain. Detect this case and
+     * skip printing anything.
+     */
+    if (!keychain_list)
+        return;
+
+    for (ALL_LIST_ELEMENTS_RO(keychain_list, node, keychain)) {
+        for (ALL_LIST_ELEMENTS_RO(keychain->key, knode, key)) {
+            if (key->string) {
+		++keys;
+
+                if (key->string_encrypted)
+		    ++keys_encrypted;
+
+            }
+        }
+    }
+
+    vty_out(vty, "%sKeychain: keys: %u, encrypted: %u\n",
+	indentstr, keys, keys_encrypted);
 }
 
 DEFUN (accept_lifetime_day_month_day_month,
