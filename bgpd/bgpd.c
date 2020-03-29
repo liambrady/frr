@@ -7139,6 +7139,59 @@ bgp_keycrypt_state_change(bool now_encrypting)
     }
 }
 
+static void
+bgp_keycrypt_encryption_show_status(struct vty *vty, const char *indentstr)
+{
+    struct bgp		*bgp;
+    struct peer		*peer;
+    struct peer_group	*group;
+    struct listnode	*node, *nnode;
+    struct listnode	*mnode, *mnnode;
+
+    uint		peer_group_keys = 0;
+    uint		peer_group_keys_encrypted = 0;
+
+    uint		peer_keys = 0;
+    uint		peer_keys_encrypted = 0;
+
+    for (ALL_LIST_ELEMENTS(bm->bgp, mnode, mnnode, bgp)) {
+
+	/* skip all auto created vrf as they dont have user config */
+	if (CHECK_FLAG(bgp->vrf_flags, BGP_VRF_AUTO))
+	    continue;
+
+	/* peer-group */
+	for (ALL_LIST_ELEMENTS(bgp->group, node, nnode, group)) {
+	    peer = group->conf;
+	    if (CHECK_FLAG(peer->flags, PEER_FLAG_PASSWORD)) {
+		++peer_group_keys;
+
+		if (peer->password_encrypted)
+		    ++peer_group_keys_encrypted;
+	    }
+	}
+
+	/* Normal neighbor configuration. */
+	for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer)) {
+	    if (!CHECK_FLAG(peer->flags, PEER_FLAG_CONFIG_NODE))
+		continue;
+
+	    if (CHECK_FLAG(peer->flags, PEER_FLAG_PASSWORD)) {
+		++peer_keys;
+
+		if (peer->password_encrypted)
+		    ++peer_keys_encrypted;
+	    }
+
+	}
+    }
+
+    vty_out(vty, "%sBGP: peer-group passwords: %u, encrypted: %u\n",
+	indentstr, peer_group_keys, peer_group_keys_encrypted);
+    vty_out(vty, "%s     neighbor (peer) passwords: %u, encrypted: %u\n",
+	indentstr, peer_keys, peer_keys_encrypted);
+}
+
 struct frr_pthread *bgp_pth_io;
 struct frr_pthread *bgp_pth_ka;
 
@@ -7228,13 +7281,12 @@ void bgp_init(unsigned short instance)
 	/* BFD init */
 	bgp_bfd_init();
 
-#ifdef CRYPTO_OPENSSL
-        keycrypt_init();
-#endif
-
 	cmd_variable_handler_register(bgp_viewvrf_var_handlers);
 
+        keycrypt_init();
 	keycrypt_register_protocol_callback(bgp_keycrypt_state_change);
+	keycrypt_register_protocol_show_callback(
+	    bgp_keycrypt_encryption_show_status);
 }
 
 void bgp_terminate(void)

@@ -9981,6 +9981,18 @@ ospf_keycrypt_state_change_vrf_one(struct vrf *vrf)
 
 		}
 	    }
+	    while (1) {
+		    if (rn == NULL)
+			    rn = route_top(IF_OIFS_PARAMS(ifp));
+		    else
+			    rn = route_next(rn);
+
+		    if (rn == NULL)
+			    break;
+		    params = rn->info;
+		    if (params != NULL)
+			    break;
+	    }
 	} while (rn);
     }
 }
@@ -10016,6 +10028,188 @@ ospf_keycrypt_state_change(bool now_encrypting)
     struct vrf *vrf = NULL;
     RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
 	ospf_keycrypt_state_change_vrf_one(vrf);
+    }
+}
+
+/* see ospf_config_write_one */
+static void
+ospf_keycrypt_status_ospf_one(
+    struct vty *vty,
+    const char *indentstr,
+    struct ospf *ospf)
+{
+    uint simple_keys = 0;
+    uint simple_keys_encrypted = 0;
+
+    uint md5_keys = 0;
+    uint md5_keys_encrypted = 0;
+
+    struct listnode *node;
+    struct ospf_vl_data *vl_data;
+
+    /* this part modeled on config_write_virtual_link() */
+    for (ALL_LIST_ELEMENTS_RO(ospf->vlinks, node, vl_data)) {
+	struct listnode *n2;
+	struct crypt_key *ck;
+	struct ospf_if_params *params;
+
+	if (!vl_data)
+		continue;
+
+	params = IF_DEF_PARAMS(vl_data->vl_oi->ifp);
+
+	/* Auth key */
+	if (params->auth_simple[0]) {
+	    ++simple_keys;
+	    if (params->auth_simple_encrypted)
+		++simple_keys_encrypted;
+	}
+	/* md5 keys */
+	for (ALL_LIST_ELEMENTS_RO(params->auth_crypt, n2, ck)) {
+	    ++md5_keys;
+	    if (ck->auth_key_encrypted)
+		++md5_keys_encrypted;
+	}
+    }
+
+    if (simple_keys || md5_keys) {
+	vty_out(vty,
+	    "%sOSPF instance %u vrf %s: simple keys: %u, encrypted: %u\n",
+	    indentstr, ospf->instance, (ospf->name? ospf->name: "(none)"),
+	    simple_keys, simple_keys_encrypted);
+	vty_out(vty,
+	    "%sOSPF instance %u vrf %s: md5 keys: %u, encrypted: %u\n",
+	    indentstr, ospf->instance, (ospf->name? ospf->name: "(none)"),
+	    md5_keys, md5_keys_encrypted);
+    }
+}
+
+static void
+ospf_keycrypt_status_vrf_one(
+    struct vty *vty,
+    const char *indentstr,
+    struct vrf *vrf)
+{
+    /* this part based on config_write_interface_one(vty, vrf) */
+
+    struct listnode *node;
+    struct interface *ifp;
+    struct crypt_key *ck;
+
+    uint simple_keys = 0;
+    uint simple_keys_encrypted = 0;
+
+    uint ca_keys = 0;
+    uint ca_keys_encrypted = 0;
+
+    FOR_ALL_INTERFACES (vrf, ifp) {
+
+	struct ospf_if_params *params;
+	struct route_node *rn = NULL;
+
+	if (memcmp(ifp->name, "VLINK", 5) == 0)
+		continue;
+
+	params = IF_DEF_PARAMS(ifp);
+
+	do {
+	    /* Simple Authentication Password print. */
+	    if (OSPF_IF_PARAM_CONFIGURED(params, auth_simple)
+		&& params->auth_simple[0] != '\0') {
+
+		++simple_keys;
+		if (params->auth_simple_encrypted)
+		    ++simple_keys_encrypted;
+
+#if 0
+		    zlog_err("%s: interface %s vrf %s authentication-key "
+			"%s: can't encrypt",
+			__func__, ifp->name, ((ifp->vrf_id == VRF_DEFAULT)?
+			    "default":
+			    vrf->name),
+			((params != IF_DEF_PARAMS(ifp) && rn)?
+			    inet_ntoa(rn->p.u.prefix4):
+			    "")
+		    );
+#endif
+	    }
+
+
+	    /* Cryptographic Authentication Key print. */
+	    if (params && params->auth_crypt) {
+
+		for (ALL_LIST_ELEMENTS_RO(params->auth_crypt, node, ck)) {
+
+		    ++ca_keys;
+		    if (ck->auth_key_encrypted)
+			++ca_keys_encrypted;
+
+#if 0
+			zlog_err("%s: interface %s vrf %s "
+			    "message-digest-key %d %s: can't encrypt",
+			    __func__, ifp->name,
+			    ((ifp->vrf_id == VRF_DEFAULT)?
+				"default":
+				vrf->name),
+			    ck->key_id,
+			    ((params != IF_DEF_PARAMS(ifp) && rn)?
+				inet_ntoa(rn->p.u.prefix4):
+				"")
+			);
+#endif
+		}
+	    }
+	    while (1) {
+		    if (rn == NULL)
+			    rn = route_top(IF_OIFS_PARAMS(ifp));
+		    else
+			    rn = route_next(rn);
+
+		    if (rn == NULL)
+			    break;
+		    params = rn->info;
+		    if (params != NULL)
+			    break;
+	    }
+	} while (rn);
+    }
+    if (simple_keys || ca_keys) {
+	vty_out(vty,
+	    "%sOSPF vrf %s: simple keys: %u, encrypted: %u\n",
+	    indentstr, vrf->name,
+	    simple_keys, simple_keys_encrypted);
+
+	vty_out(vty,
+	    "%sOSPF vrf %s: message-digest-keys keys: %u, encrypted: %u\n",
+	    indentstr, vrf->name,
+	    ca_keys, ca_keys_encrypted);
+    }
+}
+
+static void
+ospf_keycrypt_encryption_show_status(struct vty *vty, const char *indentstr)
+{
+    if (listcount(om->ospf)) {
+
+	struct ospf *ospf;
+	struct listnode *ospf_node = NULL;
+
+	for (ALL_LIST_ELEMENTS_RO(om->ospf, ospf_node, ospf)) {
+		/* VRF Default check if it is running.
+		 * Upon daemon start, there could be default instance
+		 * in absence of 'router ospf'/oi_running is disabled. */
+		if (ospf->vrf_id == VRF_DEFAULT && ospf->oi_running)
+			ospf_keycrypt_status_ospf_one(vty, indentstr, ospf);
+		/* For Non-Default VRF simply display the configuration,
+		 * even if it is not oi_running. */
+		else if (ospf->vrf_id != VRF_DEFAULT)
+			ospf_keycrypt_status_ospf_one(vty, indentstr, ospf);
+	}
+    }
+
+    struct vrf *vrf = NULL;
+    RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+	ospf_keycrypt_status_vrf_one(vty, indentstr, vrf);
     }
 }
 
@@ -11214,5 +11408,8 @@ void ospf_vty_init(void)
 	/* Init zebra related vty commands. */
 	ospf_vty_zebra_init();
 
+	keycrypt_init();
 	keycrypt_register_protocol_callback(ospf_keycrypt_state_change);
+	keycrypt_register_protocol_show_callback(
+	    ospf_keycrypt_encryption_show_status);
 }

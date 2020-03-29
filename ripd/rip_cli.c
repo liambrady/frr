@@ -1102,6 +1102,31 @@ rip_keycrypt_state_change(bool now_encrypting)
     }
 }
 
+static void
+rip_keycrypt_encryption_show_status(struct vty *vty, const char *indentstr)
+{
+    uint auth_str = 0;
+    uint auth_str_encrypted = 0;
+
+    struct vrf *vrf = NULL;
+    RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+	struct interface *ifp;
+	FOR_ALL_INTERFACES (vrf, ifp) {
+
+	    struct rip_interface *ri = ifp->info;
+
+	    if (ri->auth_str) {
+		++auth_str;
+		if (ri->auth_str_encrypted)
+		    ++auth_str_encrypted;
+
+	    }
+	}
+    }
+    vty_out(vty, "%sRIP: authentication strings: %u, encrypted: %u\n",
+	indentstr, auth_str, auth_str_encrypted);
+}
+
 void rip_cli_init(void)
 {
 	install_element(CONFIG_NODE, &router_rip_cmd);
@@ -1143,5 +1168,8 @@ void rip_cli_init(void)
 
 	install_element(ENABLE_NODE, &clear_ip_rip_cmd);
 
+	keycrypt_init();
 	keycrypt_register_protocol_callback(rip_keycrypt_state_change);
+	keycrypt_register_protocol_show_callback(
+	    rip_keycrypt_encryption_show_status);
 }
