@@ -344,7 +344,7 @@ keycrypt_decrypt_internal(
         return -1;
     }
 
-    *ppPlainText = XMALLOC(mt, *pPlainTextLen);
+    *ppPlainText = XMALLOC(mt, *pPlainTextLen + 1);
 
     rc = EVP_PKEY_decrypt(ctx,
         (u_char *)*ppPlainText, pPlainTextLen,
@@ -357,6 +357,7 @@ keycrypt_decrypt_internal(
             __func__, ((rc == -2)? ": not supported by public key alg": "" ));
         return -1;
     }
+    (*ppPlainText)[*pPlainTextLen] = '\0';
 
     EVP_PKEY_CTX_free(ctx);
 
