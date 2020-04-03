@@ -1320,7 +1320,7 @@ void peer_xfer_config(struct peer *peer_dst, struct peer *peer_src)
 			XSTRDUP(MTYPE_PEER_PASSWORD, peer_src->password);
 	if (peer_src->password_encrypted && !peer_dst->password_encrypted)
 		peer_dst->password_encrypted =
-			XSTRDUP(MTYPE_PEER_PASSWORD, peer_src->password_encrypted);
+			XSTRDUP(MTYPE_KEYCRYPT_CIPHER_B64, peer_src->password_encrypted);
 
 	FOREACH_AFI_SAFI (afi, safi) {
 		peer_dst->afc[afi][safi] = peer_src->afc[afi][safi];
@@ -2302,7 +2302,7 @@ int peer_delete(struct peer *peer)
 			bgp_md5_unset(peer);
 	}
 	if (peer->password_encrypted)
-		XFREE(MTYPE_PEER_PASSWORD, peer->password_encrypted);
+		XFREE(MTYPE_KEYCRYPT_CIPHER_B64, peer->password_encrypted);
 
 	bgp_timer_set(peer); /* stops all timers for Deleted */
 
