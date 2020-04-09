@@ -34,7 +34,7 @@ CliOnFail = None
 CliOnFail = 'tgen.mininet_cli'
 
 #code currently doesn't handle case where key created after startup
-def SKIP_test_init_keys():
+def test_init_keys():
     CheckFunc = 'ltemplateVersionCheck(\'4.1\', kernel=None)'
     #uncomment next line to start cli *before* script is run
     #CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'

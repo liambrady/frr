@@ -148,6 +148,8 @@ def ltemplatePreRouterStartHook():
     #trace errors/unexpected output
     cc.resetCounts()
     cmd='mkdir ~frr/.ssh ; openssl genpkey -algorithm RSA -out ~frr/.ssh/frr ; chown -R frr.frr ~frr/.ssh ; chmod -R go-rwx ~frr/.ssh ; ls -al ~frr/.ssh'
+    #comment out next line if *do *not* want to test key missing startup case
+    #cmd='echo "Key file generated *after* daemon start"'
     for r in range(0, 8):
         cc.doCmd(tgen, 'r{}'.format(r), cmd)
     return True
