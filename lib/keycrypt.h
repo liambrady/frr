@@ -25,6 +25,19 @@
 DECLARE_MTYPE(KEYCRYPT_CIPHER_B64)
 DECLARE_MTYPE(KEYCRYPT_PLAIN_TEXT)
 
+/*
+ * return codes used by some functions
+ */
+typedef enum {
+    KC_OK = 0,
+    KC_ERR_DECRYPT,
+    KC_ERR_ENCRYPT,
+    KC_ERR_BUILD_NOT_ENABLED,
+} keycrypt_err_t;
+
+const char *
+keycrypt_strerror(keycrypt_err_t kc_err);
+
 #ifdef CRYPTO_OPENSSL
 
 #define KEYCRYPT_ENABLED 1
@@ -70,5 +83,12 @@ keycrypt_decrypt(
     char		**pPlainText,		/* OUT */
     size_t		*pPlainTextLen);	/* OUT */
 
+extern keycrypt_err_t
+keycrypt_build_passwords(
+    const char		*password_in,	/* IN */
+    bool		is_encrypted,	/* IN */
+    struct memtype	*mt_plaintext,	/* IN */
+    char		**ppPlainText,	/* OUT MTYPE_KEY */
+    char		**ppCryptText);	/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
 
 #endif /* _FRR_KEYCRYPT_H */

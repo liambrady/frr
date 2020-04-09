@@ -494,6 +494,92 @@ keycrypt_decrypt(
 #endif
 }
 
+const char *
+keycrypt_strerror(keycrypt_err_t kc_err)
+{
+    switch (kc_err) {
+    case KC_OK:
+        return "No error";
+    case KC_ERR_DECRYPT:
+        return "Can't decrypt";
+    case KC_ERR_ENCRYPT:
+        return "Can't encrypt";
+    case KC_ERR_BUILD_NOT_ENABLED:
+        return "keycrypt not enabled in this build";
+    }
+    return "Unknown error";
+}
+
+/*
+ * keycrypt_build_passwords
+ *
+ * Takes a single encrypted or plaintext password as input.
+ *
+ * Attempts to encrypt or decrypt as needed, and returns either
+ * one or two dynamically-allocated strings containing the
+ * plaintext and encrypted passwords.
+ *
+ * Caller MUST take ownership of any returned allocated strings.
+ * These strings are indicated by non-NULL pointer values returned
+ * via the ppPlainText and ppCryptText parameters.
+ *
+ * NOTE! By design, this function allocates strings even if it
+ * returns an error value.
+ *
+ * Return codes:
+ *
+ *	0: KC_OK	Successful encrypt or decrypt operation
+ *	!0		encrypt or decrypt failed
+ */
+keycrypt_err_t
+keycrypt_build_passwords(
+    const char		*password_in,	/* IN */
+    bool		is_encrypted,	/* IN */
+    struct memtype	*mt_plaintext,	/* IN */
+    char		**ppPlainText,	/* OUT type mt_plaintext */
+    char		**ppCryptText)	/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
+{
+        *ppPlainText = NULL;
+	*ppCryptText = NULL;
+
+        if (is_encrypted) {
+            /* don't lose encrypted password */
+            *ppCryptText = XSTRDUP(MTYPE_KEYCRYPT_CIPHER_B64, password_in);
+
+#ifdef KEYCRYPT_ENABLED
+            if (keycrypt_decrypt(mt_plaintext,
+                password_in, strlen(password_in),
+                ppPlainText, NULL)) {
+
+                zlog_err("%s: keycrypt_decrypt failed", __func__);
+                return KC_ERR_DECRYPT;
+            }
+#else
+            zlog_err("%s: can't decrypt: keycrypt not supported in this build",
+                __func__);
+            return KC_ERR_BUILD_NOT_ENABLED;
+#endif
+        } else {
+            *ppPlainText = XSTRDUP(mt_plaintext, password_in);
+            if (keycrypt_is_now_encrypting()) {
+#ifdef KEYCRYPT_ENABLED
+                if (keycrypt_encrypt(password_in, strlen(password_in),
+                    ppCryptText, NULL)) {
+                        zlog_err("%s: keycrypt_encrypt failed", __func__);
+                        return KC_ERR_ENCRYPT;
+                }
+#else
+                zlog_err(
+                    "%s: can't encrypt: keycrypt not supported in this build",
+                    __func__);
+                return KC_ERR_BUILD_NOT_ENABLED;
+#endif
+            }
+        }
+
+	return KC_OK;
+}
+
 DEFUN_HIDDEN (debug_keycrypt_test,
        debug_keycrypt_test_cmd,
        "debug keycrypt-test STRING",

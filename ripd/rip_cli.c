@@ -983,6 +983,10 @@ void cli_show_ip_rip_authentication_string(struct vty *vty,
 	if (ri->auth_str_encrypted) {
 		pfx = "101 ";
 		str = ri->auth_str_encrypted;
+                if (!ri->auth_str) {
+                    vty_out(vty,
+                        "!!! Error: Unable to decrypt the following string\n");
+                }
 	} else {
 		pfx = "";
 		str = ri->auth_str;

@@ -1898,7 +1898,7 @@ extern int peer_unsuppress_map_set(struct peer *peer, afi_t afi, safi_t safi,
 				   const char *name,
 				   struct route_map *route_map);
 
-extern int peer_password_set(struct peer *, const char *, bool);
+extern int peer_password_set(struct peer *, const char *, bool, const char **);
 extern int peer_password_unset(struct peer *);
 
 extern int peer_unsuppress_map_unset(struct peer *, afi_t, safi_t);

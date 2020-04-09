@@ -5462,6 +5462,7 @@ int peer_local_as_unset(struct peer *peer)
 	return 0;
 }
 
+#if 0 /* superseded by keycrypt_build_passwords() */
 /*
  * Do crypto conversions and memory allocations as needed for peer passwords.
  *
@@ -5521,12 +5522,14 @@ build_passwords(
 
 	return BGP_SUCCESS;
 }
+#endif /* 0 */
 
 /* Set password for authenticating with the peer. */
 int peer_password_set(
     struct peer *peer,
     const char *password_in,
-    bool is_encrypted)
+    bool is_encrypted,
+    const char **ppCryptoErrorString)
 {
 	struct peer *member;
 	struct listnode *node, *nnode;
@@ -5536,32 +5539,90 @@ int peer_password_set(
 	char *passwdPlain;
 	char *passwdCrypt;
 
-	ret = build_passwords(password_in, is_encrypted,
-	    &passwdPlain, &passwdCrypt);
-	if (ret != BGP_SUCCESS)
-	    return ret;
+        *ppCryptoErrorString = NULL;
 
-	/* Set flag and configuration on peer. */
-	peer_flag_set(peer, PEER_FLAG_PASSWORD);
+        /* length test must be done on the cleartext */
+        int len = password_in ? strlen(password_in) : 0;
+        if (is_encrypted) {
+            if (!len) {
+                return BGP_ERR_INVALID_VALUE;
+            }
+        } else {
+            if ((len < PEER_PASSWORD_MINLEN) || (len > PEER_PASSWORD_MAXLEN)) {
+                return BGP_ERR_INVALID_VALUE;
+            }
+        }
+
+        keycrypt_err_t krc;
+        krc = keycrypt_build_passwords(password_in, is_encrypted,
+            MTYPE_PEER_PASSWORD,
+	    &passwdPlain, &passwdCrypt);
+        if (krc) {
+            if (ppCryptoErrorString)
+                *ppCryptoErrorString = keycrypt_strerror(krc);
+            zlog_err("%s: %s", __func__, keycrypt_strerror(krc));
+        }
 
         /*
          * Free old encrypted password, if any. The way to transition
          * from an encrypted password to a cleartext password is to
          * turn off "service password-encryption" and then explicitly
          * set the password in cleartext.
+         *
+         * Design requirement is to conserve new encrypted password even
+         * if we are unable to decrypt.
          */
         XFREE(MTYPE_KEYCRYPT_CIPHER_B64, peer->password_encrypted);
 	peer->password_encrypted = passwdCrypt; /* may be NULL */
 
-	password = passwdPlain;	/* tmp ref to dynamic space */
+        if (is_encrypted && passwdPlain) {
+            /*
+             * Since we must accept any encrypted password, we have
+             * to handle various kinds of invalid plaintext here.
+             */
+            int len = strlen(passwdPlain);
+            if (len > PEER_PASSWORD_MAXLEN) {
+                /* truncate */
+                passwdPlain[PEER_PASSWORD_MAXLEN] = '\0';
+                *ppCryptoErrorString = "Decrypted password too long, truncated";
+            } else if (!len) {
+                /* empty password */
+                XFREE(MTYPE_PEER_PASSWORD, passwdPlain);
+                *ppCryptoErrorString = "Decrypted to invalid 0-length password";
+                /* fall through and get caught by !passwdPlain check below */
+            }
+        }
+
+        bool changed = false;
+        if (passwdPlain) {
+            if (!CHECK_FLAG(peer->flags, PEER_FLAG_PASSWORD))
+                changed = true;
+            else
+                if (strcmp(passwdPlain, peer->password))
+                    changed = true;
+        } else {
+            /*
+             * We reach here if provided password was encrypted and we
+             * are unable to decrypt (or if decrypted password was 0-length).
+             * This situation is equivalent to clearing the password.
+             */
+            if (CHECK_FLAG(peer->flags, PEER_FLAG_PASSWORD)) {
+                return peer_password_unset(peer);
+            }
+        }
 
 	/*
 	 * no change to cleartext version of password - we are done
 	 */
-	if (peer->password && strcmp(peer->password, password) == 0) {
+        if (!changed) {
             XFREE(MTYPE_PEER_PASSWORD, passwdPlain);
 	    return BGP_SUCCESS;
         }
+
+	password = passwdPlain;	/* tmp ref to dynamic space */
+
+	/* Set flag and configuration on peer. */
+	peer_flag_set(peer, PEER_FLAG_PASSWORD);
 
 	XFREE(MTYPE_PEER_PASSWORD, peer->password);
 	peer->password = passwdPlain;

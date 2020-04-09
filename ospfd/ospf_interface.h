@@ -96,6 +96,7 @@ struct ospf_if_params {
 	uint8_t auth_simple__config : 1;
 
         char *auth_simple_encrypted;      /* dynamically allocated */
+	uint8_t auth_simple_encrypted__config : 1;
 
 	DECLARE_IF_PARAM(struct list *,
 			 auth_crypt);     /* List of Auth cryptographic data. */

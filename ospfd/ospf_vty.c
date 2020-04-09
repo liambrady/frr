@@ -949,6 +949,7 @@ ospf_find_vl_data(struct ospf *ospf, struct ospf_vl_config_data *vl_config)
 	return vl_data;
 }
 
+#if 0 /* superseded by keycrypt_build_passwords() */
 /*
  * Returns 0 on success. On successful return, caller must free
  * dynamically-allocated *ppPlainText, *ppCryptText if any.
@@ -995,6 +996,7 @@ build_passwords(
 
 	return 0;
 }
+#endif /* 0 */
 
 static int ospf_vl_set_security(struct ospf_vl_data *vl_data,
 				struct ospf_vl_config_data *vl_config)
@@ -1023,14 +1025,20 @@ static int ospf_vl_set_security(struct ospf_vl_data *vl_data,
 		    *(char *)IF_DEF_PARAMS(ifp)->auth_simple = 0;
 		} else {
 
-		    if (build_passwords(vl_config->auth_key,
-			vl_config->auth_key_is_encrypted, &pPlainText,
-			&pCryptText))
-			    return CMD_WARNING_CONFIG_FAILED;
+		    keycrypt_err_t krc;
+		    krc = keycrypt_build_passwords(vl_config->auth_key,
+			vl_config->auth_key_is_encrypted,
+			MTYPE_KEYCRYPT_PLAIN_TEXT,
+			&pPlainText, &pCryptText);
+		    if (krc) {
+			zlog_err("%s: %s", __func__, keycrypt_strerror(krc));
+			vty_out(vty, "Error: %s\n", keycrypt_strerror(krc));
+		    }
 
 		    memset(IF_DEF_PARAMS(ifp)->auth_simple, 0,
 			   OSPF_AUTH_SIMPLE_SIZE + 1);
-		    strlcpy((char *)IF_DEF_PARAMS(ifp)->auth_simple,
+		    if (pPlainText)
+			strlcpy((char *)IF_DEF_PARAMS(ifp)->auth_simple,
 			    pPlainText,
 			    sizeof(IF_DEF_PARAMS(ifp)->auth_simple));
 		    XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pPlainText);
@@ -1051,9 +1059,15 @@ static int ospf_vl_set_security(struct ospf_vl_data *vl_data,
 			return CMD_WARNING;
 		}
 
-		if (build_passwords(vl_config->md5_key,
-		    vl_config->md5_key_is_encrypted, &pPlainText, &pCryptText))
-			return CMD_WARNING_CONFIG_FAILED;
+		keycrypt_err_t krc;
+		krc = keycrypt_build_passwords(vl_config->md5_key,
+		    vl_config->md5_key_is_encrypted,
+		    MTYPE_KEYCRYPT_PLAIN_TEXT,
+		    &pPlainText, &pCryptText);
+		if (krc) {
+		    zlog_err("%s: %s", __func__, keycrypt_strerror(krc));
+		    vty_out(vty, "Error: %s\n", keycrypt_strerror(krc));
+		}
 
 		ck = ospf_crypt_key_new();
 		ck->key_id = vl_config->crypto_key_id;
@@ -7050,13 +7064,36 @@ DEFUN (ip_ospf_authentication_key,
 	    is_encrypted = true;
 	}
 
-	if (build_passwords(argv[idx_key]->arg, is_encrypted,
-	    &pPlainText, &pCryptText))
-		return CMD_WARNING_CONFIG_FAILED;
+	keycrypt_err_t krc;
+	krc = keycrypt_build_passwords(argv[idx_key]->arg, is_encrypted,
+	    MTYPE_KEYCRYPT_PLAIN_TEXT,
+	    &pPlainText, &pCryptText);
+	if (krc) {
+	    zlog_err("%s: Error: %s", __func__, keycrypt_strerror(krc));
+	    vty_out(vty, "Error: %s\n", keycrypt_strerror(krc));
+	}
 
-	strlcpy((char *)params->auth_simple, pPlainText,
-		sizeof(params->auth_simple));
-	SET_IF_PARAM(params, auth_simple);
+	if (is_encrypted && pPlainText && !strlen(pPlainText)) {
+	    const char *msg =
+		"Error: encrypted password decrypted to 0-length string";
+	    vty_out(vty, "%s\n", msg);
+	    zlog_err("%s: %s", __func__, msg);
+	    XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pPlainText);
+	}
+
+	if (pPlainText) {
+	    strlcpy((char *)params->auth_simple, pPlainText,
+		    sizeof(params->auth_simple));
+	    SET_IF_PARAM(params, auth_simple);
+	} else {
+	    /* can't  decrypt is equivalent to unsetting auth str */
+	    memset(params->auth_simple, 0, OSPF_AUTH_SIMPLE_SIZE);
+	    UNSET_IF_PARAM(params, auth_simple);
+	    if (params != IF_DEF_PARAMS(ifp)) {
+		ospf_free_if_params(ifp, addr);
+		ospf_if_update_params(ifp, addr);
+	    }
+	}
 	XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pPlainText);
 
 	XFREE(MTYPE_KEYCRYPT_CIPHER_B64, params->auth_simple_encrypted);
@@ -7174,12 +7211,28 @@ DEFUN (ip_ospf_message_digest_key,
 		return CMD_WARNING;
 	}
 
-	if (build_passwords(cryptkey, is_encrypted, &pPlainText, &pCryptText))
-		return CMD_WARNING_CONFIG_FAILED;
+	keycrypt_err_t krc;
+	krc = keycrypt_build_passwords(cryptkey, is_encrypted,
+	    MTYPE_KEYCRYPT_PLAIN_TEXT,
+	    &pPlainText, &pCryptText);
+	if (krc) {
+	    zlog_err("%s: Error: %s", __func__, keycrypt_strerror(krc));
+	    vty_out(vty, "Error: %s\n", keycrypt_strerror(krc));
+	}
+
+	if (is_encrypted && pPlainText && !strlen(pPlainText)) {
+	    const char *msg =
+		"Error: encrypted password decrypted to 0-length string";
+	    vty_out(vty, "%s\n", msg);
+	    zlog_err("%s: %s", __func__, msg);
+	    XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pPlainText);
+	}
+
 
 	ck = ospf_crypt_key_new();
 	ck->key_id = (uint8_t)key_id;
 	strlcpy((char *)ck->auth_key, pPlainText, sizeof(ck->auth_key));
+	XFREE(MTYPE_KEYCRYPT_CIPHER_B64, ck->auth_key_encrypted);
 	ck->auth_key_encrypted = pCryptText;
 
 	ospf_crypt_key_add(params->auth_crypt, ck);

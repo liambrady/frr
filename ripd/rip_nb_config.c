@@ -1023,9 +1023,14 @@ int lib_interface_rip_authentication_scheme_md5_auth_length_destroy(
 	return NB_OK;
 }
 
+#if 0 /* delete me: superseded by keycrypt_build_passwords() */
 /*
- * Returns 0 on success. On successful return, caller must free
- * dynamically-allocated *ppPlainText, *ppCryptText if any.
+ * Returns 0 on success.
+ *
+ * Regardless of return value, caller must check string pointers as
+ * they may have been allocated. Caller must free or otherwise deal
+ * with dynamically-allocated *ppPlainText, *ppCryptText if any.
+ *
  */
 static int
 build_passwords(
@@ -1035,6 +1040,7 @@ build_passwords(
     char **ppCryptText)		/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
 {
 	*ppCryptText = NULL;
+        *ppPlainText = NULL;
 	char *password;
 	struct memtype *mt = MTYPE_RIP_INTERFACE_STRING;
 
@@ -1044,10 +1050,14 @@ build_passwords(
                         password_in, strlen(password_in),
                         &password, NULL)) {
                         zlog_err("%s: keycrypt_decrypt failed", __func__);
+                        /* don't lose encrypted password */
+                        *ppCryptText = XSTRDUP(mt, password_in);
                         return -1;
                 }
 #else
 		zlog_err("%s: keycrypt not supported in this build", __func__);
+                /* don't lose encrypted password */
+                *ppCryptText = XSTRDUP(mt, password_in);
 		return -1;
 #endif
         } else {
@@ -1059,7 +1069,8 @@ build_passwords(
 		if (keycrypt_encrypt(password, strlen(password),
 		    ppCryptText, NULL)) {
                         zlog_err("%s: keycrypt_encrypt failed", __func__);
-                        XFREE(mt, password);
+                        /* don't lose plaintext password */
+                        *ppPlainText = password;
                         return -1;
 		}
         }
@@ -1069,6 +1080,7 @@ build_passwords(
 
 	return 0;
 }
+#endif
 
 struct tmp_rip_auth_password_strings {
     char	*pPlainText;
@@ -1087,8 +1099,6 @@ int lib_interface_rip_authentication_password_modify(
 	struct rip_interface *ri;
         const char *password_in;
         bool is_encrypted = false;
-        char *pPlainText;
-        char *pCryptText;
         size_t pwlen;
         struct tmp_rip_auth_password_strings *pwstrs;
 
@@ -1100,26 +1110,18 @@ int lib_interface_rip_authentication_password_modify(
                 is_encrypted = true;
                 password_in = password_in + 4;
             }
-
-            if (build_passwords(password_in, is_encrypted,
-                &pPlainText, &pCryptText)) {
-                zlog_err("%s: build_passwords failed", __func__);
-                return NB_ERR_VALIDATION;
-            }
-
-            if (is_encrypted) {
-                pwlen = strlen(pPlainText);
-            } else {
+            if (!is_encrypted) {
                 pwlen = strlen(password_in);
+                if ((pwlen < 1) || (pwlen > 16)) {
+                    zlog_err("%s: plaintext password length %lu not in range 1-16",
+                        __func__, pwlen);
+                    return NB_ERR_VALIDATION;
+                }
             }
-            XFREE(MTYPE_RIP_INTERFACE_STRING, pPlainText);
-            XFREE(MTYPE_KEYCRYPT_CIPHER_B64, pCryptText);
-            if ((pwlen < 1) || (pwlen > 16)) {
-                zlog_err("%s: plaintext password length %lu not in range 1-16",
-                    __func__, pwlen);
-                return NB_ERR_VALIDATION;
-            }
-
+            /*
+             * per design requirements not to lose encrypted passwords,
+             * always accept them
+             */
             return NB_OK;
 
         case NB_EV_PREPARE:
@@ -1128,23 +1130,36 @@ int lib_interface_rip_authentication_password_modify(
                 password_in = password_in + 4;
             }
 
-            /*
-             * resource is not allocated until "prepare" phase,
-             * so let's do decryption/encryption again as needed
-             * and save the result. This way we can avoid failing
-             * in the "apply" phase.
-             */
-            if (build_passwords(password_in, is_encrypted,
-                &pPlainText, &pCryptText)) {
-                zlog_err("%s: build_passwords failed", __func__);
-                return NB_ERR_VALIDATION;
-            }
-
             pwstrs = XCALLOC(MTYPE_TMP_AUTH_PASSWORD_STRINGS,
                 sizeof(struct tmp_rip_auth_password_strings));
             resource->ptr = pwstrs;
-            pwstrs->pPlainText = pPlainText;
-            pwstrs->pCryptText = pCryptText;
+
+            keycrypt_err_t krc;
+            krc = keycrypt_build_passwords(password_in, is_encrypted,
+                MTYPE_RIP_INTERFACE_STRING,
+                &(pwstrs->pPlainText), &(pwstrs->pCryptText));
+            if (krc) {
+                zlog_err("%s: %s", __func__, keycrypt_strerror(krc));
+            }
+
+	    /*
+	     * Since we must accept any encrypted password, we have
+	     * to handle various kinds of invalid plaintext here.
+	     */
+	    if (is_encrypted && pwstrs->pPlainText) {
+		int len = strlen(pwstrs->pPlainText);
+		if (len > 16) {
+		    /* truncate */
+		    pwstrs->pPlainText[16] = '\0';
+		    zlog_err("%s: Decrypted password too long, truncated",
+			__func__);
+		} else if (!len) {
+		    /* empty password */
+		    XFREE(MTYPE_RIP_INTERFACE_STRING, pwstrs->pPlainText);
+		    zlog_err("%s: Decrypted to invalid 0-length password",
+			__func__);
+		}
+	    }
 
             return NB_OK;
 
@@ -1168,7 +1183,7 @@ int lib_interface_rip_authentication_password_modify(
 
         pwstrs = resource->ptr;
 
-        ri->auth_str = pwstrs->pPlainText;
+        ri->auth_str = pwstrs->pPlainText; /* may be NULL */
         ri->auth_str_encrypted = pwstrs->pCryptText; /* may be NULL */
 
 	return NB_OK;

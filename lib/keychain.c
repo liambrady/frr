@@ -306,13 +306,16 @@ DEFUN (no_key,
 	return CMD_SUCCESS;
 }
 
+#if 0 /* superseded by keycrypt_build_passwords() */
 /*
  * Do crypto conversions and memory allocations as needed for peer passwords.
  *
- * Non-CMD_SUCCESS return values are CLI error values
+ * Returns CMD_SUCCESS on success; Non-CMD_SUCCESS return values are
+ * CLI error values
  *
- * If CMD_SUCCESS is returned, caller should use dynamically-allocated
- * returned pointer values for plain and crypt text.
+ * Regardless of return value, caller must check string pointers as
+ * they may have been allocated. Caller must free or otherwise deal
+ * with dynamically-allocated *ppPlainText, *ppCryptText if any.
  */
 static int
 build_passwords(
@@ -358,6 +361,7 @@ build_passwords(
 
 	return CMD_SUCCESS;
 }
+#endif
 
 DEFUN (key_string,
        key_string_cmd,
@@ -377,10 +381,9 @@ DEFUN (key_string,
                 idx_line = 2;
         }
 
-        int ret = build_passwords(vty, argv[idx_line]->arg, is_encrypted,
-            &passwdPlain, &passwdCrypt);
-        if (ret != CMD_SUCCESS)
-            return ret;
+        keycrypt_err_t krc;
+        krc = keycrypt_build_passwords(argv[idx_line]->arg, is_encrypted,
+            MTYPE_KEY, &passwdPlain, &passwdCrypt);
 
         /*
          * Free old encrypted password, if any. The way to transition
@@ -393,6 +396,16 @@ DEFUN (key_string,
 
         XFREE(MTYPE_KEY, key->string);
 	key->string = passwdPlain;
+
+        if (krc) {
+            vty_out(vty, "Error: keycrypt: %s\n", keycrypt_strerror(krc));
+            /*
+             * this error code doesn't fully encompass the situation.
+             * Configuration will have changed, due to design requirement
+             * to conserve keys even if they can't be encrypted/decrypted.
+             */
+            return CMD_WARNING_CONFIG_FAILED;
+        }
 
 	return CMD_SUCCESS;
 }
@@ -1141,10 +1154,15 @@ static int keychain_config_write(struct vty *vty)
 			vty_out(vty, " key %d\n", key->index);
 
 			if (key->string) {
-                                if (key->string_encrypted)
+                                if (key->string_encrypted) {
+                                    if (!key->string) {
+                                        vty_out(vty,
+                                            "!!! Error: Unable to decrypt "
+                                            "the following string\n");
+                                    }
                                     vty_out(vty, "  key-string 101 %s\n",
                                         key->string_encrypted);
-                                else
+                                } else
                                     vty_out(vty, "  key-string %s\n",
                                         key->string);
                         }

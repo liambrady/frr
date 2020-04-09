@@ -4022,6 +4022,7 @@ DEFUN (neighbor_password,
 	struct peer *peer;
 	int ret;
 	bool is_encrypted = false;
+	const char *pCryptoErrorString = NULL;
 
 	if (argc == 5) {
 	    is_encrypted = true;
@@ -4032,7 +4033,10 @@ DEFUN (neighbor_password,
 	if (!peer)
 		return CMD_WARNING_CONFIG_FAILED;
 
-	ret = peer_password_set(peer, argv[idx_line]->arg, is_encrypted);
+	ret = peer_password_set(peer, argv[idx_line]->arg, is_encrypted,
+	    &pCryptoErrorString);
+	if (pCryptoErrorString)
+	    vty_out(vty, "Error: encryption: %s\n", pCryptoErrorString);
 	return bgp_vty_return(vty, ret);
 }
 
