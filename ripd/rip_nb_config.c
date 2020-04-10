@@ -1124,8 +1124,6 @@ int lib_interface_rip_authentication_password_modify(
 
         pwstrs = resource->ptr;
 
-/* debug delete me */
-zlog_err("%s: pwstrs->pPlainText: %p\n", __func__, pwstrs->pPlainText);
         ri->auth_str = pwstrs->pPlainText; /* may be NULL */
         ri->auth_str_encrypted = pwstrs->pCryptText; /* may be NULL */
 
