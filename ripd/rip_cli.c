@@ -1119,12 +1119,10 @@ rip_keycrypt_encryption_show_status(struct vty *vty, const char *indentstr)
 
 	    struct rip_interface *ri = ifp->info;
 
-	    if (ri->auth_str) {
+	    if (ri->auth_str)
 		++auth_str;
-		if (ri->auth_str_encrypted)
-		    ++auth_str_encrypted;
-
-	    }
+	    if (ri->auth_str_encrypted)
+		++auth_str_encrypted;
 	}
     }
     vty_out(vty, "%s%s: authentication strings: %u, encrypted: %u\n",

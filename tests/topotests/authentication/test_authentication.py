@@ -129,6 +129,43 @@ def test_notification_check():
     #CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'
     ltemplateTest('scripts/notification_check.py', False, CliOnFail, CheckFunc)
 
+#
+# encrypted protocol key conservation test:
+# - move openssl private key file away
+# - save cfg/restart protocol (have plaintext keys, but save encrypted keys;
+#				load encrypted keys but can't decrypt)
+# - save cfg/restart protocol (save encrypted keys, load encrypted keys but
+#				can't decrypt)
+# - verify encrypted protocol keys in running configuration but no plain
+# - move openssl private key file back (same private key as before!)
+# - save cfg/restart protocol (save encrypted keys, load encrypted keys
+#				and able to decrypt)
+# - verify peerings
+# - verify correct plain/encrypted key counts (scripts/check-keys.py)
+#
+def test_protocol_key_conservation():
+    CheckFunc = 'ltemplateVersionCheck(\'4.1\', kernel=None)'
+    #uncomment next line to start cli *before* script is run
+    #CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'
+    ltemplateTest('scripts/move-key-away.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-rip.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-rip.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-ospf.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-ospf.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-bgp.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-bgp.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/check-keys-encrypted-only.py', False, CliOnFail,
+        CheckFunc, LogTag='ck 1')
+    ltemplateTest('scripts/move-key-back.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-rip.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/rip-show.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-ospf.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/ospf-neighbors.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-bgp.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/bgp-adjacencies.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/check-keys.py', False, CliOnFail,
+        CheckFunc, LogTag='ck 2')
+
 if __name__ == '__main__':
     retval = pytest.main(["-s"])
     sys.exit(retval)

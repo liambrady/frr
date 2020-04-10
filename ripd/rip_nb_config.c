@@ -1023,65 +1023,6 @@ int lib_interface_rip_authentication_scheme_md5_auth_length_destroy(
 	return NB_OK;
 }
 
-#if 0 /* delete me: superseded by keycrypt_build_passwords() */
-/*
- * Returns 0 on success.
- *
- * Regardless of return value, caller must check string pointers as
- * they may have been allocated. Caller must free or otherwise deal
- * with dynamically-allocated *ppPlainText, *ppCryptText if any.
- *
- */
-static int
-build_passwords(
-    const char *password_in,	/* IN */
-    bool is_encrypted,		/* IN */
-    char **ppPlainText,		/* OUT MTYPE_RIP_INTERFACE_STRING */
-    char **ppCryptText)		/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
-{
-	*ppCryptText = NULL;
-        *ppPlainText = NULL;
-	char *password;
-	struct memtype *mt = MTYPE_RIP_INTERFACE_STRING;
-
-        if (is_encrypted) {
-#ifdef KEYCRYPT_ENABLED
-                if (keycrypt_decrypt(mt,
-                        password_in, strlen(password_in),
-                        &password, NULL)) {
-                        zlog_err("%s: keycrypt_decrypt failed", __func__);
-                        /* don't lose encrypted password */
-                        *ppCryptText = XSTRDUP(mt, password_in);
-                        return -1;
-                }
-#else
-		zlog_err("%s: keycrypt not supported in this build", __func__);
-                /* don't lose encrypted password */
-                *ppCryptText = XSTRDUP(mt, password_in);
-		return -1;
-#endif
-        } else {
-		password = XSTRDUP(mt, password_in);
-        }
-
-#ifdef KEYCRYPT_ENABLED
-	if (keycrypt_is_now_encrypting() || is_encrypted) {
-		if (keycrypt_encrypt(password, strlen(password),
-		    ppCryptText, NULL)) {
-                        zlog_err("%s: keycrypt_encrypt failed", __func__);
-                        /* don't lose plaintext password */
-                        *ppPlainText = password;
-                        return -1;
-		}
-        }
-#endif
-
-	*ppPlainText = password;
-
-	return 0;
-}
-#endif
-
 struct tmp_rip_auth_password_strings {
     char	*pPlainText;
     char	*pCryptText;
@@ -1183,6 +1124,8 @@ int lib_interface_rip_authentication_password_modify(
 
         pwstrs = resource->ptr;
 
+/* debug delete me */
+zlog_err("%s: pwstrs->pPlainText: %p\n", __func__, pwstrs->pPlainText);
         ri->auth_str = pwstrs->pPlainText; /* may be NULL */
         ri->auth_str_encrypted = pwstrs->pCryptText; /* may be NULL */
 

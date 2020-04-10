@@ -5463,68 +5463,6 @@ int peer_local_as_unset(struct peer *peer)
 	return 0;
 }
 
-#if 0 /* superseded by keycrypt_build_passwords() */
-/*
- * Do crypto conversions and memory allocations as needed for peer passwords.
- *
- * Non-BGP_SUCCESS return values are CLI error values
- *
- * If BGP_SUCCESS is returned, caller should use dynamically-allocated
- * returned pointer values for plain and crypt text.
- */
-static int
-build_passwords(
-    const char *password_in,	/* IN */
-    bool is_encrypted,		/* IN */
-    char **ppPlainText,		/* OUT MTYPE_PEER_PASSWORD */
-    char **ppCryptText)		/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
-{
-	*ppCryptText = NULL;
-	char *password;
-
-        if (is_encrypted) {
-#ifdef KEYCRYPT_ENABLED
-                if (keycrypt_decrypt(MTYPE_PEER_PASSWORD,
-			password_in, strlen(password_in),
-                        &password, NULL)) {
-                        return BGP_ERR_CRYPTO_FAILED;
-                }
-#else
-		zlog_err("%s: keycrypt not supported in this build", __func__);
-		return BGP_ERR_CRYPTO_FAILED;
-#endif
-        } else {
-		password = XSTRDUP(MTYPE_PEER_PASSWORD, password_in);
-        }
-
-        /* length test must be done on the cleartext */
-        int len = password ? strlen(password) : 0;
-	if ((len < PEER_PASSWORD_MINLEN) || (len > PEER_PASSWORD_MAXLEN)) {
-                XFREE(MTYPE_PEER_PASSWORD, password);
-		return BGP_ERR_INVALID_VALUE;
-        }
-
-#ifdef KEYCRYPT_ENABLED
-	/*
-	 * Could simplify by using already-encrypted input if given, but
-	 * always re-encrypting might enable us to take advantage of
-	 * potential future compatibility features.
-	 */
-	if (keycrypt_is_now_encrypting() || is_encrypted) {
-		if (keycrypt_encrypt(password, strlen(password),
-		    ppCryptText, NULL)) {
-                        XFREE(MTYPE_PEER_PASSWORD, password);
-                        return BGP_ERR_CRYPTO_FAILED;
-		}
-        }
-#endif
-
-	*ppPlainText = password;
-
-	return BGP_SUCCESS;
-}
-#endif /* 0 */
-
 /* Set password for authenticating with the peer. */
 int peer_password_set(
     struct peer *peer,
@@ -7227,10 +7165,10 @@ bgp_keycrypt_encryption_show_status(struct vty *vty, const char *indentstr)
 	    peer = group->conf;
 	    if (CHECK_FLAG(peer->flags, PEER_FLAG_PASSWORD)) {
 		++peer_group_keys;
-
-		if (peer->password_encrypted)
-		    ++peer_group_keys_encrypted;
 	    }
+	    /* can have encrypted without plaintext if decrypt fails */
+	    if (peer->password_encrypted)
+		++peer_group_keys_encrypted;
 	}
 
 	/* Normal neighbor configuration. */
@@ -7240,10 +7178,10 @@ bgp_keycrypt_encryption_show_status(struct vty *vty, const char *indentstr)
 
 	    if (CHECK_FLAG(peer->flags, PEER_FLAG_PASSWORD)) {
 		++peer_keys;
-
-		if (peer->password_encrypted)
-		    ++peer_keys_encrypted;
 	    }
+	    /* can have encrypted without plaintext if decrypt fails */
+	    if (peer->password_encrypted)
+		++peer_keys_encrypted;
 
 	}
     }

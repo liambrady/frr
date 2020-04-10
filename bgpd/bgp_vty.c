@@ -14431,11 +14431,12 @@ static void bgp_config_write_peer_global(struct vty *vty, struct bgp *bgp,
 	}
 
 	/* password */
-	if (peergroup_flag_check(peer, PEER_FLAG_PASSWORD)) {
-		if (peer->password_encrypted) {
-		    vty_out(vty, " neighbor %s password 101 %s\n", addr,
-			peer->password_encrypted);
-		} else {
+        if (peer->password_encrypted) {
+            /* save encrypted password even if unable to decrypt earlier */
+            vty_out(vty, " neighbor %s password 101 %s\n", addr,
+                peer->password_encrypted);
+        } else {
+                if (peergroup_flag_check(peer, PEER_FLAG_PASSWORD)) {
 		    vty_out(vty, " neighbor %s password %s\n", addr,
 			peer->password);
 		}

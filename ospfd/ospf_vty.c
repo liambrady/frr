@@ -950,55 +950,6 @@ ospf_find_vl_data(struct ospf *ospf, struct ospf_vl_config_data *vl_config)
 	return vl_data;
 }
 
-#if 0 /* superseded by keycrypt_build_passwords() */
-/*
- * Returns 0 on success. On successful return, caller must free
- * dynamically-allocated *ppPlainText, *ppCryptText if any.
- */
-static int
-build_passwords(
-    const char *password_in,	/* IN */
-    bool is_encrypted,		/* IN */
-    char **ppPlainText,		/* OUT MTYPE_KEYCRYPT_PLAIN_TEXT */
-    char **ppCryptText)		/* OUT MTYPE_KEYCRYPT_CIPHER_B64 */
-{
-	*ppCryptText = NULL;
-	char *password;
-	struct memtype *mt = MTYPE_KEYCRYPT_PLAIN_TEXT;
-
-        if (is_encrypted) {
-#ifdef KEYCRYPT_ENABLED
-                if (keycrypt_decrypt(mt,
-                        password_in, strlen(password_in),
-                        &password, NULL)) {
-                        zlog_err("%s: keycrypt_decrypt failed", __func__);
-                        return -1;
-                }
-#else
-		zlog_err("%s: keycrypt not supported in this build", __func__);
-		return -1;
-#endif
-        } else {
-		password = XSTRDUP(mt, password_in);
-        }
-
-#ifdef KEYCRYPT_ENABLED
-	if (keycrypt_is_now_encrypting() || is_encrypted) {
-		if (keycrypt_encrypt(password, strlen(password),
-		    ppCryptText, NULL)) {
-                        zlog_err("%s: keycrypt_encrypt failed", __func__);
-                        XFREE(mt, password);
-                        return -1;
-		}
-        }
-#endif
-
-	*ppPlainText = password;
-
-	return 0;
-}
-#endif /* 0 */
-
 static int ospf_vl_set_security(struct ospf_vl_data *vl_data,
 				struct ospf_vl_config_data *vl_config)
 {
@@ -1073,7 +1024,8 @@ static int ospf_vl_set_security(struct ospf_vl_data *vl_data,
 		ck = ospf_crypt_key_new();
 		ck->key_id = vl_config->crypto_key_id;
 		memset(ck->auth_key, 0, OSPF_AUTH_MD5_SIZE + 1);
-		strlcpy((char *)ck->auth_key, pPlainText,
+                if (pPlainText)
+                    strlcpy((char *)ck->auth_key, pPlainText,
 			sizeof(ck->auth_key));
 
 		XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pPlainText);
@@ -7232,7 +7184,8 @@ DEFUN (ip_ospf_message_digest_key,
 
 	ck = ospf_crypt_key_new();
 	ck->key_id = (uint8_t)key_id;
-	strlcpy((char *)ck->auth_key, pPlainText, sizeof(ck->auth_key));
+        if (pPlainText)
+            strlcpy((char *)ck->auth_key, pPlainText, sizeof(ck->auth_key));
 	XFREE(MTYPE_KEYCRYPT_CIPHER_B64, ck->auth_key_encrypted);
 	ck->auth_key_encrypted = pCryptText;
 
@@ -10113,20 +10066,20 @@ ospf_keycrypt_status_ospf_one(
 	params = IF_DEF_PARAMS(vl_data->vl_oi->ifp);
 
 	/* Auth key */
-	if (params->auth_simple[0]) {
+	if (params->auth_simple[0])
 	    ++simple_keys;
-	    if (params->auth_simple_encrypted)
-		++simple_keys_encrypted;
-	}
+	if (params->auth_simple_encrypted)
+	    ++simple_keys_encrypted;
 	/* md5 keys */
 	for (ALL_LIST_ELEMENTS_RO(params->auth_crypt, n2, ck)) {
-	    ++md5_keys;
+	    if (ck->auth_key[0])
+		++md5_keys;
 	    if (ck->auth_key_encrypted)
 		++md5_keys_encrypted;
 	}
     }
 
-    if (simple_keys || md5_keys) {
+    if (simple_keys || simple_keys_encrypted || md5_keys || md5_keys_encrypted) {
 	vty_out(vty,
 	    "%s%s: instance %u vrf %s: simple keys: %u, encrypted: %u\n",
 	    indentstr, frr_protoname, ospf->instance,
@@ -10174,9 +10127,9 @@ ospf_keycrypt_status_vrf_one(
 		&& params->auth_simple[0] != '\0') {
 
 		++simple_keys;
-		if (params->auth_simple_encrypted)
-		    ++simple_keys_encrypted;
 	    }
+	    if (params->auth_simple_encrypted)
+		++simple_keys_encrypted;
 
 
 	    /* Cryptographic Authentication Key print. */
@@ -10184,7 +10137,8 @@ ospf_keycrypt_status_vrf_one(
 
 		for (ALL_LIST_ELEMENTS_RO(params->auth_crypt, node, ck)) {
 
-		    ++ca_keys;
+		    if (ck->auth_key[0])
+			++ca_keys;
 		    if (ck->auth_key_encrypted)
 			++ca_keys_encrypted;
 		}
@@ -10203,7 +10157,7 @@ ospf_keycrypt_status_vrf_one(
 	    }
 	} while (rn);
     }
-    if (simple_keys || ca_keys) {
+    if (simple_keys || simple_keys_encrypted || ca_keys || ca_keys_encrypted) {
 	vty_out(vty,
 	    "%s%s: vrf %s: simple keys: %u, encrypted: %u\n",
 	    indentstr, frr_protoname, vrf->name,
