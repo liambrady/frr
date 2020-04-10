@@ -24,6 +24,7 @@
 #include "memory.h"
 #include "linklist.h"
 #include "keychain.h"
+#include "libfrr.h"
 #include "keycrypt.h"
 
 DEFINE_MTYPE_STATIC(LIB, KEY, "Key")
@@ -661,8 +662,8 @@ keychain_encryption_show_status(struct vty *vty, const char *indentstr)
         }
     }
 
-    vty_out(vty, "%sKeychain: keys: %u, encrypted: %u\n",
-	indentstr, keys, keys_encrypted);
+    vty_out(vty, "%s%s: Keychain: keys: %u, encrypted: %u\n",
+	indentstr, frr_protoname, keys, keys_encrypted);
 }
 
 DEFUN (accept_lifetime_day_month_day_month,

@@ -35,6 +35,7 @@
 #include <lib/json.h>
 #include "defaults.h"
 #include "keycrypt.h"
+#include "libfrr.h"
 
 #include "ospfd/ospfd.h"
 #include "ospfd/ospf_asbr.h"
@@ -10127,12 +10128,14 @@ ospf_keycrypt_status_ospf_one(
 
     if (simple_keys || md5_keys) {
 	vty_out(vty,
-	    "%sOSPF instance %u vrf %s: simple keys: %u, encrypted: %u\n",
-	    indentstr, ospf->instance, (ospf->name? ospf->name: "(none)"),
+	    "%s%s: instance %u vrf %s: simple keys: %u, encrypted: %u\n",
+	    indentstr, frr_protoname, ospf->instance,
+	    (ospf->name? ospf->name: "(none)"),
 	    simple_keys, simple_keys_encrypted);
 	vty_out(vty,
-	    "%sOSPF instance %u vrf %s: md5 keys: %u, encrypted: %u\n",
-	    indentstr, ospf->instance, (ospf->name? ospf->name: "(none)"),
+	    "%s%s: instance %u vrf %s: md5 keys: %u, encrypted: %u\n",
+	    indentstr, frr_protoname, ospf->instance,
+	    (ospf->name? ospf->name: "(none)"),
 	    md5_keys, md5_keys_encrypted);
     }
 }
@@ -10173,18 +10176,6 @@ ospf_keycrypt_status_vrf_one(
 		++simple_keys;
 		if (params->auth_simple_encrypted)
 		    ++simple_keys_encrypted;
-
-#if 0
-		    zlog_err("%s: interface %s vrf %s authentication-key "
-			"%s: can't encrypt",
-			__func__, ifp->name, ((ifp->vrf_id == VRF_DEFAULT)?
-			    "default":
-			    vrf->name),
-			((params != IF_DEF_PARAMS(ifp) && rn)?
-			    inet_ntoa(rn->p.u.prefix4):
-			    "")
-		    );
-#endif
 	    }
 
 
@@ -10196,20 +10187,6 @@ ospf_keycrypt_status_vrf_one(
 		    ++ca_keys;
 		    if (ck->auth_key_encrypted)
 			++ca_keys_encrypted;
-
-#if 0
-			zlog_err("%s: interface %s vrf %s "
-			    "message-digest-key %d %s: can't encrypt",
-			    __func__, ifp->name,
-			    ((ifp->vrf_id == VRF_DEFAULT)?
-				"default":
-				vrf->name),
-			    ck->key_id,
-			    ((params != IF_DEF_PARAMS(ifp) && rn)?
-				inet_ntoa(rn->p.u.prefix4):
-				"")
-			);
-#endif
 		}
 	    }
 	    while (1) {
@@ -10228,13 +10205,13 @@ ospf_keycrypt_status_vrf_one(
     }
     if (simple_keys || ca_keys) {
 	vty_out(vty,
-	    "%sOSPF vrf %s: simple keys: %u, encrypted: %u\n",
-	    indentstr, vrf->name,
+	    "%s%s: vrf %s: simple keys: %u, encrypted: %u\n",
+	    indentstr, frr_protoname, vrf->name,
 	    simple_keys, simple_keys_encrypted);
 
 	vty_out(vty,
-	    "%sOSPF vrf %s: message-digest-keys keys: %u, encrypted: %u\n",
-	    indentstr, vrf->name,
+	    "%s%s: vrf %s: message-digest-keys keys: %u, encrypted: %u\n",
+	    indentstr, frr_protoname, vrf->name,
 	    ca_keys, ca_keys_encrypted);
     }
 }

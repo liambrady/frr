@@ -33,6 +33,8 @@ typedef enum {
     KC_ERR_DECRYPT,
     KC_ERR_ENCRYPT,
     KC_ERR_BUILD_NOT_ENABLED,
+    KC_ERR_KEYFILE_PATH,	/* can't generate keyfile path */
+    KC_ERR_KEYFILE_READ,	/* can't read keyfile */
 } keycrypt_err_t;
 
 const char *

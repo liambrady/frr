@@ -46,6 +46,7 @@
 #include "frr_pthread.h"
 #include "bitfield.h"
 #include "keycrypt.h"
+#include "libfrr.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_table.h"
@@ -7247,8 +7248,8 @@ bgp_keycrypt_encryption_show_status(struct vty *vty, const char *indentstr)
 	}
     }
 
-    vty_out(vty, "%sBGP: peer-group passwords: %u, encrypted: %u\n",
-	indentstr, peer_group_keys, peer_group_keys_encrypted);
+    vty_out(vty, "%s%s: peer-group passwords: %u, encrypted: %u\n",
+	indentstr, frr_protoname, peer_group_keys, peer_group_keys_encrypted);
     vty_out(vty, "%s     neighbor (peer) passwords: %u, encrypted: %u\n",
 	indentstr, peer_keys, peer_keys_encrypted);
 }

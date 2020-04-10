@@ -1127,8 +1127,8 @@ rip_keycrypt_encryption_show_status(struct vty *vty, const char *indentstr)
 	    }
 	}
     }
-    vty_out(vty, "%sRIP: authentication strings: %u, encrypted: %u\n",
-	indentstr, auth_str, auth_str_encrypted);
+    vty_out(vty, "%s%s: authentication strings: %u, encrypted: %u\n",
+	indentstr, frr_protoname, auth_str, auth_str_encrypted);
 }
 
 void rip_cli_init(void)

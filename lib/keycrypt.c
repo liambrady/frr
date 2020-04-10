@@ -23,6 +23,7 @@
 #include "keycrypt.h"
 #include "command.h"
 #include "keychain.h"
+#include "libfrr.h"
 
 DEFINE_MTYPE(LIB, KEYCRYPT_CIPHER_B64, "keycrypt base64 encoded")
 DEFINE_MTYPE(LIB, KEYCRYPT_PLAIN_TEXT, "keycrypt plain text")
@@ -71,7 +72,9 @@ keycrypt_keyfile_path(void)
     char		*pbuf = XMALLOC(MTYPE_TMP, PWENT_BUFSIZE);
     int			rc;
     char		*path = NULL;
+    size_t		len_pw_dir;
     size_t		len;
+    const char		*sep = "/";
 
     rc = getpwuid_r(uid, &pwd, pbuf, PWENT_BUFSIZE, &pwd_result);
     if (rc) {
@@ -81,9 +84,14 @@ keycrypt_keyfile_path(void)
         return NULL;
     }
 
-    len = strlen(pwd.pw_dir) + 1 + strlen(KEYFILE_NAME_PRIVATE) + 1;
+    len_pw_dir = strlen(pwd.pw_dir);
+    len = len_pw_dir + 1 + strlen(KEYFILE_NAME_PRIVATE) + 1;
     path = XMALLOC(MTYPE_KEYCRYPT_KEYFILE_PATH,  len);
-    sprintf(path, "%s/%s", pwd.pw_dir, KEYFILE_NAME_PRIVATE);
+
+    /* clean up one trailing slash if needed */
+    if (pwd.pw_dir[len_pw_dir - 1] == '/')
+        sep = "";
+    sprintf(path, "%s%s%s", pwd.pw_dir, sep, KEYFILE_NAME_PRIVATE);
     XFREE(MTYPE_TMP, pbuf);
 
     return path;
@@ -364,6 +372,33 @@ keycrypt_decrypt_internal(
     return 0;
 }
 
+/*
+ * Allocates an EVP_PKEY which should later be freed via EVP_PKEY_free()
+ */
+static keycrypt_err_t
+keycrypt_read_default_keyfile(EVP_PKEY **ppKey)
+{
+    char	*keyfile_path;
+
+    *ppKey = NULL;
+
+    keyfile_path = keycrypt_keyfile_path();
+    if (!keyfile_path) {
+        zlog_err("%s: Error: can't compute keyfile path\n", __func__);
+        return KC_ERR_KEYFILE_PATH;
+    }
+
+    *ppKey = keycrypt_read_keyfile(keyfile_path, KEYCRYPT_FORMAT_PEM );
+    if (!*ppKey) {
+        zlog_err("%s: Error: keycrypt_read_keyfile can't read \"%s\"\n",
+            __func__, keyfile_path);
+        XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+        return KC_ERR_KEYFILE_READ;
+    }
+    XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+    return KC_OK;
+}
+
 static EVP_PKEY *keycrypt_cached_pkey;
 static time_t	keycrypt_pkey_check_time;
 #define KEYCRYPT_CHECK_PKEY_SECONDS 10
@@ -378,24 +413,14 @@ keycrypt_get_pkey()
 
     now = monotime(NULL);
     if (now - keycrypt_pkey_check_time > KEYCRYPT_CHECK_PKEY_SECONDS) {
-        char		*keyfile_path;
         EVP_PKEY	*pKey;
+        keycrypt_err_t	rc;
 
         keycrypt_pkey_check_time = now;
 
-        keyfile_path = keycrypt_keyfile_path();
-        if (!keyfile_path) {
-            zlog_err("%s: Error: can't compute keyfile path\n", __func__);
+        rc = keycrypt_read_default_keyfile(&pKey);
+        if (rc != KC_OK)
             goto end;
-        }
-
-        pKey = keycrypt_read_keyfile(keyfile_path, KEYCRYPT_FORMAT_PEM );
-        if (!pKey) {
-            zlog_err("%s: Error: keycrypt_read_keyfile\n", __func__);
-            XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
-            goto end;
-        }
-        XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
 
         if (keycrypt_cached_pkey)
             EVP_PKEY_free(keycrypt_cached_pkey);
@@ -507,6 +532,10 @@ keycrypt_strerror(keycrypt_err_t kc_err)
         return "Can't encrypt";
     case KC_ERR_BUILD_NOT_ENABLED:
         return "keycrypt not enabled in this build";
+    case KC_ERR_KEYFILE_PATH:
+        return "Can't compute private key file path";
+    case KC_ERR_KEYFILE_READ:
+        return "Can't read private key file";
     }
     return "Unknown error";
 }
@@ -752,9 +781,36 @@ keycrypt_show_status_internal(struct vty *vty)
 #else
     status = "not included in software build";
 #endif
-    vty_out(vty, "Keycrypt status: %s\n", status);
+    vty_out(vty, "%s Keycrypt status: %s\n", frr_protoname, status);
 
 #ifdef KEYCRYPT_ENABLED
+    char	*keyfile_path;
+
+    keyfile_path = keycrypt_keyfile_path();
+
+    if (keyfile_path) {
+        EVP_PKEY	*pKey;
+
+        vty_out(vty, "%s%s: Private key file name: \"%s\"\n",
+            indentstr, frr_protoname, keyfile_path);
+        pKey = keycrypt_read_keyfile(keyfile_path, KEYCRYPT_FORMAT_PEM);
+        XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+        if (pKey) {
+            vty_out(vty, "%s%s: Private key file status: readable\n",
+                indentstr, frr_protoname);
+            EVP_PKEY_free(pKey);
+        } else {
+            vty_out(vty, "%s%s: Private key file status: NOT READABLE\n",
+                indentstr, frr_protoname);
+        }
+
+    } else {
+        uid_t	uid = geteuid();
+        vty_out(vty,
+            "%s%s: Private key file name: UNABLE TO COMPUTE (euid %u)\n",
+            indentstr, frr_protoname, uid);
+    }
+
     keychain_encryption_show_status(vty, indentstr);
 
     if (keycrypt_protocol_show_callback) {
