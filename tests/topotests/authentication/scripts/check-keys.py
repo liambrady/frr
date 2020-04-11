@@ -13,6 +13,7 @@ luCommand('r5','vtysh -c "show k s"', 'RIP: authentication strings: 1, encrypted
 luCommand('r5','vtysh -c "show k s"', 'passwords: 2, encrypted: 2','pass','BGP Keycrypt status')
 
 luCommand('r1','vtysh -c "show k s"', 'RIP: authentication strings: 2, encrypted: 2','pass','RIP Keycrypt status')
+luCommand('r1','vtysh -c "show k s"', 'RIP: Keychain: keys: 1, encrypted: 1','pass','RIP Keychain Keycrypt status')
 luCommand('r1','vtysh -c "show k s"', 'OSPF: vrf default: message-digest-keys keys: 1, encrypted: 1','pass','OSPF Keycrypt status')
 luCommand('r1','vtysh -c "show k s"', 'passwords: 3, encrypted: 3','pass','BGP Keycrypt status')
 

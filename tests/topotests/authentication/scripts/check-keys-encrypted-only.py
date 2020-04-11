@@ -18,6 +18,10 @@ want = {
             'plain': 0,
             'crypt': 2,
         },
+        'rip-keychain': {
+            'plain': 0,
+            'crypt': 1,
+        },
     },
     'r2': {
         'bgp': {
@@ -67,6 +71,9 @@ for router,protoinfo in want.items():
             match = 'OSPF: vrf default: message-digest-keys keys: {}, encrypted: {}'.format(keyinfo['plain'], keyinfo['crypt'])
         if proto == 'rip':
             match = 'RIP: authentication strings: {}, encrypted: {}'.format(
+                keyinfo['plain'], keyinfo['crypt'])
+        if proto == 'rip-keychain':
+            match = 'RIP: Keychain: keys: {}, encrypted: {}'.format(
                 keyinfo['plain'], keyinfo['crypt'])
         if match == None:
             luResult(router, False, "Invalid Protocol: test coding error")

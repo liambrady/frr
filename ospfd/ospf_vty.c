@@ -10295,16 +10295,51 @@ static int config_write_interface_one(struct vty *vty, struct vrf *vrf)
 			}
 
 			/* Simple Authentication Password print. */
-			if (OSPF_IF_PARAM_CONFIGURED(params, auth_simple)
-			    && params->auth_simple[0] != '\0') {
-				const char *pfx;
-                                char *str;
-				if (params->auth_simple_encrypted) {
-				    pfx = "101 ";
-				    str = params->auth_simple_encrypted;
-				} else {
-				    pfx = "";
-				    str = (char *)params->auth_simple;
+			{
+			    const char *str = NULL;
+			    const char *pfx;
+			    bool simple_is_set;
+			    bool warn_decrypt_fail = false;
+
+			    /*
+			     * There are two ways to express this password
+			     * in the configuration: plaintext or encrypted.
+			     * If we have an encrypted version, emit that
+			     * version ONLY, otherwise emit the plaintext.
+			     *
+			     * If we have the encrypted version but not the
+			     * plaintext, it means there was some problem
+			     * decrypting, so print a warning comment to the 
+			     * emitted configuration so that the user might
+			     * have a clue why the password doesn't work
+			     * in the routing protocol.
+			     *
+			     * Internally, presence of the plaintext password
+			     * is indicated when both a flag is set AND the
+			     * first byte of the password string is nonzero.
+			     *
+			     * Presence of the encrypted password is indicated
+			     * when the auth_simple_encrypted field is nonzero.
+			     */
+			    simple_is_set =
+				OSPF_IF_PARAM_CONFIGURED(params, auth_simple) &&
+				(params->auth_simple[0] != '\0');
+
+			    if (params->auth_simple_encrypted) {
+				pfx = "101 ";
+				str = params->auth_simple_encrypted;
+				if (!simple_is_set)
+				    warn_decrypt_fail = true;
+			    } else if (simple_is_set) {
+				pfx = "";
+				str = (char *)params->auth_simple;
+			    }
+
+			    if (str) {
+				if (warn_decrypt_fail) {
+				    vty_out(vty,
+					"!!! Error: Unable to decrypt the "
+					"following string\n");
 				}
 				vty_out(vty,
 					" ip ospf authentication-key %s%s",
@@ -10313,31 +10348,41 @@ static int config_write_interface_one(struct vty *vty, struct vrf *vrf)
 					vty_out(vty, " %s",
 						inet_ntoa(rn->p.u.prefix4));
 				vty_out(vty, "\n");
+			    }
 			}
 
 			/* Cryptographic Authentication Key print. */
 			if (params && params->auth_crypt) {
 				const char *pfx;
                                 char *str;
-				for (ALL_LIST_ELEMENTS_RO(params->auth_crypt,
-							  node, ck)) {
-					if (ck->auth_key_encrypted) {
-					    pfx = "101 ";
-					    str = ck->auth_key_encrypted;
-					} else {
-					    pfx = "";
-					    str = (char *)ck->auth_key;
-					}
-					vty_out(vty,
-						" ip ospf message-digest-key %d md5 %s%s",
-						ck->key_id,
-						pfx, str);
-					if (params != IF_DEF_PARAMS(ifp) && rn)
-						vty_out(vty, " %s",
-							inet_ntoa(
-								rn->p.u.prefix4));
-					vty_out(vty, "\n");
+			    for (ALL_LIST_ELEMENTS_RO(params->auth_crypt,
+						      node, ck)) {
+
+				bool warn_decrypt_fail = false;
+
+				if (ck->auth_key_encrypted) {
+				    pfx = "101 ";
+				    str = ck->auth_key_encrypted;
+				    if (!ck->auth_key[0])
+					warn_decrypt_fail = true;
+				} else {
+				    pfx = "";
+				    str = (char *)ck->auth_key;
 				}
+				if (warn_decrypt_fail) {
+				    vty_out(vty,
+					"!!! Error: Unable to decrypt the "
+					"following string\n");
+				}
+				vty_out(vty,
+				    " ip ospf message-digest-key %d md5 %s%s",
+				    ck->key_id,
+				    pfx, str);
+				if (params != IF_DEF_PARAMS(ifp) && rn)
+				    vty_out(vty, " %s",
+					    inet_ntoa(rn->p.u.prefix4));
+				vty_out(vty, "\n");
+			    }
 			}
 
 			/* Interface Output Cost print. */
@@ -10689,44 +10734,66 @@ static int config_write_virtual_link(struct vty *vty, struct ospf *ospf)
 			else
 				vty_out(vty, " area %s virtual-link %s\n", buf,
 					inet_ntoa(vl_data->vl_peer));
+
+			struct ospf_if_params *params;
+
+			params = IF_DEF_PARAMS(vl_data->vl_oi->ifp);
+
 			/* Auth key */
-			if (IF_DEF_PARAMS(vl_data->vl_oi->ifp)->auth_simple[0]
-			    != '\0') {
-				struct ospf_if_params *params;
-				const char *pfx;
-                                char *str;
-				params = IF_DEF_PARAMS(vl_data->vl_oi->ifp);
-				if (params->auth_simple_encrypted) {
-				    pfx = "101 ";
-				    str = params->auth_simple_encrypted;
-				} else {
-				    pfx = "";
-				    str = (char *)params->auth_simple;
+			{
+			    const char *pfx;
+			    const char *str = NULL;
+			    bool warn_decrypt_fail = false;
+
+			    if (params->auth_simple_encrypted) {
+				pfx = "101 ";
+				str = params->auth_simple_encrypted;
+				if (!params->auth_simple[0])
+				    warn_decrypt_fail = true;
+			    } else if (params->auth_simple[0]) {
+				pfx = "";
+				str = (char *)params->auth_simple;
+			    }
+			    if (str) {
+				if (warn_decrypt_fail) {
+				    vty_out(vty,
+					"!!! Error: Unable to decrypt the "
+					"following string\n");
 				}
 				vty_out(vty,
 					" area %s virtual-link %s authentication-key %s%s\n",
 					buf, inet_ntoa(vl_data->vl_peer),
 					pfx, str);
+			    }
 			}
+
 			/* md5 keys */
-			for (ALL_LIST_ELEMENTS_RO(
-				    IF_DEF_PARAMS(vl_data->vl_oi->ifp)
-					     ->auth_crypt,
+			for (ALL_LIST_ELEMENTS_RO(params->auth_crypt,
 				    n2, ck)) {
-                                        const char *pfx;
-					char *str;
-					if (ck->auth_key_encrypted) {
-					    pfx = "101 ";
-					    str = ck->auth_key_encrypted;
-					} else {
-					    pfx = "";
-					    str = (char *)ck->auth_key;
-					}
-				vty_out(vty,
-					" area %s virtual-link %s"
-					" message-digest-key %d md5 %s%s\n",
-					buf, inet_ntoa(vl_data->vl_peer),
-					ck->key_id, pfx, str);
+
+			    const char *pfx;
+			    const char *str = NULL;
+			    bool warn_decrypt_fail = false;
+
+			    if (ck->auth_key_encrypted) {
+				pfx = "101 ";
+				str = ck->auth_key_encrypted;
+				if (!ck->auth_key[0])
+				    warn_decrypt_fail = true;
+			    } else {
+				pfx = "";
+				str = (char *)ck->auth_key;
+			    }
+
+			    if (warn_decrypt_fail) {
+				vty_out(vty, "!!! Error: Unable to decrypt the "
+				    "following string\n");
+			    }
+			    vty_out(vty,
+				    " area %s virtual-link %s"
+				    " message-digest-key %d md5 %s%s\n",
+				    buf, inet_ntoa(vl_data->vl_peer),
+				    ck->key_id, pfx, str);
 			}
 		}
 	}

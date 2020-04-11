@@ -652,13 +652,10 @@ keychain_encryption_show_status(struct vty *vty, const char *indentstr)
 
     for (ALL_LIST_ELEMENTS_RO(keychain_list, node, keychain)) {
         for (ALL_LIST_ELEMENTS_RO(keychain->key, knode, key)) {
-            if (key->string) {
+            if (key->string)
 		++keys;
-
-                if (key->string_encrypted)
-		    ++keys_encrypted;
-
-            }
+            if (key->string_encrypted)
+                ++keys_encrypted;
         }
     }
 
@@ -1154,18 +1151,15 @@ static int keychain_config_write(struct vty *vty)
 		for (ALL_LIST_ELEMENTS_RO(keychain->key, knode, key)) {
 			vty_out(vty, " key %d\n", key->index);
 
-			if (key->string) {
-                                if (key->string_encrypted) {
-                                    if (!key->string) {
-                                        vty_out(vty,
-                                            "!!! Error: Unable to decrypt "
-                                            "the following string\n");
-                                    }
-                                    vty_out(vty, "  key-string 101 %s\n",
-                                        key->string_encrypted);
-                                } else
-                                    vty_out(vty, "  key-string %s\n",
-                                        key->string);
+                        if (key->string_encrypted) {
+                            if (!key->string) {
+                                vty_out(vty, "!!! Error: Unable to decrypt "
+                                    "the following string\n");
+                            }
+                            vty_out(vty, "  key-string 101 %s\n",
+                                key->string_encrypted);
+                        } else if (key->string) {
+                            vty_out(vty, "  key-string %s\n", key->string);
                         }
 
 			if (key->accept.start) {

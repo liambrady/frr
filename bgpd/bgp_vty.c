@@ -14432,6 +14432,10 @@ static void bgp_config_write_peer_global(struct vty *vty, struct bgp *bgp,
 
 	/* password */
         if (peer->password_encrypted) {
+	    if (!peergroup_flag_check(peer, PEER_FLAG_PASSWORD)) {
+		vty_out(vty,
+		    "!!! Error: Unable to decrypt the following string\n");
+	    }
             /* save encrypted password even if unable to decrypt earlier */
             vty_out(vty, " neighbor %s password 101 %s\n", addr,
                 peer->password_encrypted);

@@ -156,6 +156,8 @@ def test_protocol_key_conservation():
     ltemplateTest('scripts/restart-bgp.py', False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/check-keys-encrypted-only.py', False, CliOnFail,
         CheckFunc, LogTag='ck 1')
+    ltemplateTest('scripts/check-decrypt-fail-cfg-warning.py',
+        False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/move-key-back.py', False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/restart-rip.py', False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/rip-show.py', False, CliOnFail, CheckFunc)
