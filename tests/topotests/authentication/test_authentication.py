@@ -79,6 +79,12 @@ def test_notification_check1():
     #CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'
     ltemplateTest('scripts/notification_check.py', False, CliOnFail, CheckFunc)
 
+def test_ldp1():
+    CheckFunc = 'ltemplateVersionCheck(\'4.1\', kernel=None)'
+    #uncomment next line to start cli *before* script is run
+    #CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'
+    ltemplateTest('scripts/ldp-neighbors.py', False, CliOnFail, CheckFunc)
+
 #do restarts
 def test_restart_rip():
     CheckFunc = 'ltemplateVersionCheck(\'4.1\', kernel=None)'
@@ -97,6 +103,12 @@ def test_restart_bgp():
     #uncomment next line to start cli *before* script is run
     #CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'
     ltemplateTest('scripts/restart-bgp.py', False, CliOnFail, CheckFunc)
+
+def test_restart_ldp():
+    CheckFunc = 'ltemplateVersionCheck(\'4.1\', kernel=None)'
+    #uncomment next line to start cli *before* script is run
+    #CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'
+    ltemplateTest('scripts/restart-ldp.py', False, CliOnFail, CheckFunc)
 
 def test_check_keys2():
     CheckFunc = 'ltemplateVersionCheck(\'4.1\', kernel=None)'
@@ -154,6 +166,8 @@ def test_protocol_key_conservation():
     ltemplateTest('scripts/restart-ospf.py', False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/restart-bgp.py', False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/restart-bgp.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-ldp.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-ldp.py', False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/check-keys-encrypted-only.py', False, CliOnFail,
         CheckFunc, LogTag='ck 1')
     ltemplateTest('scripts/check-decrypt-fail-cfg-warning.py',
@@ -165,6 +179,8 @@ def test_protocol_key_conservation():
     ltemplateTest('scripts/ospf-neighbors.py', False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/restart-bgp.py', False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/bgp-adjacencies.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/restart-ldp.py', False, CliOnFail, CheckFunc)
+    ltemplateTest('scripts/ldp-neighbors.py', False, CliOnFail, CheckFunc)
     ltemplateTest('scripts/check-keys.py', False, CliOnFail,
         CheckFunc, LogTag='ck 2')
 

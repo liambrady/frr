@@ -48,6 +48,10 @@ want = {
         },
     },
     'r5': {
+        'ldp': {
+            'plain': 0,
+            'crypt': 1,
+        },
         'bgp': {
             'plain': 0,
             'crypt': 2,
@@ -74,6 +78,9 @@ for router,protoinfo in want.items():
                 keyinfo['plain'], keyinfo['crypt'])
         if proto == 'rip-keychain':
             match = 'RIP: Keychain: keys: {}, encrypted: {}'.format(
+                keyinfo['plain'], keyinfo['crypt'])
+	if proto == 'ldp':
+	    match = 'LDP: neighbor passwords: {}, encrypted: {}'.format(
                 keyinfo['plain'], keyinfo['crypt'])
         if match == None:
             luResult(router, False, "Invalid Protocol: test coding error")

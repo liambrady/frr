@@ -90,7 +90,7 @@ sub scan_file {
             $protocol = "VTYSH_RIPD|VTYSH_EIGRPD";
         }
         elsif ($file =~ /lib\/keycrypt\.c$/) {
-            $protocol = "VTYSH_BGPD|VTYSH_OSPFD|VTYSH_RIPD";
+            $protocol = "VTYSH_BGPD|VTYSH_OSPFD|VTYSH_RIPD|VTYSH_LDPD";
         }
         elsif ($file =~ /lib\/routemap\.c$/ || $file =~ /lib\/routemap_cli\.c$/) {
             $protocol = "VTYSH_RMAP";

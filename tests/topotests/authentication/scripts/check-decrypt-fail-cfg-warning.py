@@ -9,7 +9,7 @@ want = {
     'r1': {'rip': 3},				# 2 rip, 1 keychain
     'r2': {'bgp': 6, 'ospf': 3, 'rip': 3,},
     'r4': {'bgp': 6, 'rip': 3,},
-    'r5': {'bgp': 2},
+    'r5': {'bgp': 2, 'ldp': 1},
     'r7': {'bgp': 1},
 }
 
