@@ -9884,34 +9884,33 @@ ospf_keycrypt_state_change_ospf_one(struct ospf *ospf)
 
             /* Auth key */
             if (params->auth_simple[0]) {
-                XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
-                    params->auth_simple_encrypted);
-                if (keycrypt_encrypt((char *)params->auth_simple,
-                    strlen((char *)params->auth_simple),
-                    &params->auth_simple_encrypted, NULL)) {
-                    zlog_err("%s: can't encrypt simple passwd for "
-                        "ospf instance %u vrf %s "
-                        "area %s virtual-link %s",
-                        __func__, ospf->instance, ospf->name,
-                        buf, inet_ntoa(vl_data->vl_peer));
+                if (!params->auth_simple_encrypted) {
+                    if (keycrypt_encrypt((char *)params->auth_simple,
+                        strlen((char *)params->auth_simple),
+                        &params->auth_simple_encrypted, NULL)) {
+                        zlog_err("%s: can't encrypt simple passwd for "
+                            "ospf instance %u vrf %s "
+                            "area %s virtual-link %s",
+                            __func__, ospf->instance, ospf->name,
+                            buf, inet_ntoa(vl_data->vl_peer));
+                    }
                 }
             }
             /* md5 keys */
             for (ALL_LIST_ELEMENTS_RO(params->auth_crypt, n2, ck)) {
 
-                XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
-                    ck->auth_key_encrypted);
+                if (!ck->auth_key_encrypted) {
+                    if (keycrypt_encrypt((char *)ck->auth_key,
+                        strlen((char *)ck->auth_key),
+                        &ck->auth_key_encrypted, NULL)) {
 
-                if (keycrypt_encrypt((char *)ck->auth_key,
-                    strlen((char *)ck->auth_key),
-                    &ck->auth_key_encrypted, NULL)) {
-
-                    zlog_err("%s: can't encrypt md5 id %d for "
-                        "ospf instance %u vrf %s "
-                        "area %s virtual-link %s",
-                        __func__, ck->key_id,
-                        ospf->instance, ospf->name,
-                        buf, inet_ntoa(vl_data->vl_peer));
+                        zlog_err("%s: can't encrypt md5 id %d for "
+                            "ospf instance %u vrf %s "
+                            "area %s virtual-link %s",
+                            __func__, ck->key_id,
+                            ospf->instance, ospf->name,
+                            buf, inet_ntoa(vl_data->vl_peer));
+                    }
                 }
             }
         }
@@ -9942,22 +9941,22 @@ ospf_keycrypt_state_change_vrf_one(struct vrf *vrf)
 	    if (OSPF_IF_PARAM_CONFIGURED(params, auth_simple)
 		&& params->auth_simple[0] != '\0') {
 
-		XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
-		    params->auth_simple_encrypted);
-		if (keycrypt_encrypt((char *)params->auth_simple,
-		    strlen((char *)params->auth_simple),
-		    &params->auth_simple_encrypted, NULL)) {
+                if (!params->auth_simple_encrypted) {
+                    if (keycrypt_encrypt((char *)params->auth_simple,
+                        strlen((char *)params->auth_simple),
+                        &params->auth_simple_encrypted, NULL)) {
 
-		    zlog_err("%s: interface %s vrf %s authentication-key "
-			"%s: can't encrypt",
-			__func__, ifp->name, ((ifp->vrf_id == VRF_DEFAULT)?
-			    "default":
-			    vrf->name),
-			((params != IF_DEF_PARAMS(ifp) && rn)?
-			    inet_ntoa(rn->p.u.prefix4):
-			    "")
-		    );
-		}
+                        zlog_err("%s: interface %s vrf %s authentication-key "
+                            "%s: can't encrypt",
+                            __func__, ifp->name, ((ifp->vrf_id == VRF_DEFAULT)?
+                                "default":
+                                vrf->name),
+                            ((params != IF_DEF_PARAMS(ifp) && rn)?
+                                inet_ntoa(rn->p.u.prefix4):
+                                "")
+                        );
+                    }
+                }
 	    }
 
 
@@ -9966,25 +9965,25 @@ ospf_keycrypt_state_change_vrf_one(struct vrf *vrf)
 
 		for (ALL_LIST_ELEMENTS_RO(params->auth_crypt, node, ck)) {
 
-		    XFREE(MTYPE_KEYCRYPT_CIPHER_B64,
-			ck->auth_key_encrypted);
+                    if (!ck->auth_key_encrypted) {
 
-		    if (keycrypt_encrypt((char *)ck->auth_key,
-			strlen((char *)ck->auth_key),
-			&ck->auth_key_encrypted, NULL)) {
+                        if (keycrypt_encrypt((char *)ck->auth_key,
+                            strlen((char *)ck->auth_key),
+                            &ck->auth_key_encrypted, NULL)) {
 
-			zlog_err("%s: interface %s vrf %s "
-			    "message-digest-key %d %s: can't encrypt",
-			    __func__, ifp->name,
-			    ((ifp->vrf_id == VRF_DEFAULT)?
-				"default":
-				vrf->name),
-			    ck->key_id,
-			    ((params != IF_DEF_PARAMS(ifp) && rn)?
-				inet_ntoa(rn->p.u.prefix4):
-				"")
-			);
-		    }
+                            zlog_err("%s: interface %s vrf %s "
+                                "message-digest-key %d %s: can't encrypt",
+                                __func__, ifp->name,
+                                ((ifp->vrf_id == VRF_DEFAULT)?
+                                    "default":
+                                    vrf->name),
+                                ck->key_id,
+                                ((params != IF_DEF_PARAMS(ifp) && rn)?
+                                    inet_ntoa(rn->p.u.prefix4):
+                                    "")
+                            );
+                        }
+                    }
 
 		}
 	    }

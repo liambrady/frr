@@ -975,7 +975,7 @@ void cli_show_ip_rip_authentication_string(struct vty *vty,
 	 * pending or default values). We need to model the
 	 * encrypted string as an alternate kind of authentication
 	 * string in the YANG model. This is a quick and dirty
-	 * hack to maket the CLI work.
+	 * hack to make the CLI work.
 	 */
 	ifp = nb_running_get_entry(dnode, NULL, true);
 	ri = ifp->info;
@@ -1091,17 +1091,22 @@ rip_keycrypt_state_change(bool now_encrypting)
 
 	    struct rip_interface *ri = ifp->info;
 
-	    XFREE(MTYPE_KEYCRYPT_CIPHER_B64, ri->auth_str_encrypted);
-	    if (ri->auth_str) {
-		if (keycrypt_encrypt(ri->auth_str, strlen(ri->auth_str),
-		    &ri->auth_str_encrypted, NULL)) {
-			zlog_err("%s: interface %s vrf %s: can't encrypt",
-			    __func__, ifp->name,
-			    ((ifp->vrf_id == VRF_DEFAULT)?
-				"default":
-				vrf->name));
-		}
-	    }
+            /* skip if there is no cleartext string to encrypt */
+            if (!ri->auth_str)
+                continue;
+
+            /* skip if we already have an encrypted string */
+            if (ri->auth_str_encrypted)
+                continue;
+
+            if (keycrypt_encrypt(ri->auth_str, strlen(ri->auth_str),
+                &ri->auth_str_encrypted, NULL)) {
+                    zlog_err("%s: interface %s vrf %s: can't encrypt",
+                        __func__, ifp->name,
+                        ((ifp->vrf_id == VRF_DEFAULT)?
+                            "default":
+                            vrf->name));
+            }
 	}
     }
 }

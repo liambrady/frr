@@ -7103,11 +7103,13 @@ bgp_keycrypt_state_change(bool now_encrypting)
 	    if (!CHECK_FLAG(peer->flags, PEER_FLAG_PASSWORD))
 		continue;
 
-            /*
-             * clear text may have changed while keycrypt state
-             * was off, so always re-encrypt
-             */
-            XFREE(MTYPE_KEYCRYPT_CIPHER_B64, peer->password_encrypted);
+            /* skip if there is no cleartext string to encrypt */
+            if (!peer->password)
+                continue;
+
+            /* skip if we already have an encrypted string */
+            if (peer->password_encrypted)
+                continue;
 
 	    if (keycrypt_encrypt(peer->password, strlen(peer->password),
 		&(peer->password_encrypted), NULL)) {
@@ -7124,11 +7126,13 @@ bgp_keycrypt_state_change(bool now_encrypting)
 	    if (!CHECK_FLAG(peer->flags, PEER_FLAG_PASSWORD))
 		continue;
 
-            /*
-             * clear text may have changed while keycrypt state
-             * was off, so always re-encrypt
-             */
-            XFREE(MTYPE_KEYCRYPT_CIPHER_B64, peer->password_encrypted);
+            /* skip if there is no cleartext string to encrypt */
+            if (!peer->password)
+                continue;
+
+            /* skip if we already have an encrypted string */
+            if (peer->password_encrypted)
+                continue;
 
 	    if (keycrypt_encrypt(peer->password, strlen(peer->password),
 		&(peer->password_encrypted), NULL)) {
