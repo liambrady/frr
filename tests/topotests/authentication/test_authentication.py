@@ -31,7 +31,7 @@ from lib.ltemplate import *
 
 CliOnFail = None
 # For debugging, uncomment the next line
-CliOnFail = 'tgen.mininet_cli'
+#CliOnFail = 'tgen.mininet_cli'
 
 #code currently doesn't handle case where key created after startup
 def test_init_keys():
