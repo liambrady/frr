@@ -22,26 +22,35 @@
 #include <zebra.h>
 #include <memory.h>
 
+#define KEYCRYPT_ENABLED 0
+#if defined CRYPTO_OPENSSL || defined(HAVE_GNUTLS)
+#undef KEYCRYPT_ENABLED
+#define KEYCRYPT_ENABLED 1
+#endif
+
 DECLARE_MTYPE(KEYCRYPT_CIPHER_B64)
 DECLARE_MTYPE(KEYCRYPT_PLAIN_TEXT)
 
 /*
  * return codes used by some functions
  */
+/* clang-format off */
 typedef enum {
 	KC_OK = 0,
+	KC_ERR_MEMORY,		/* allocation failure */
+	KC_ERR_BASE64,		/* base64 encode/decode error */
 	KC_ERR_DECRYPT,
 	KC_ERR_ENCRYPT,
 	KC_ERR_BUILD_NOT_ENABLED,
-	KC_ERR_KEYFILE_PATH, /* can't generate keyfile path */
-	KC_ERR_KEYFILE_READ, /* can't read keyfile */
+	KC_ERR_KEYFILE_PATH,	/* can't generate keyfile path */
+	KC_ERR_KEYFILE_READ,	/* can't read keyfile */
+	KC_ERR_KEYFILE_PARSE,	/* can't parse keyfile */
 } keycrypt_err_t;
+/* clang-format on */
 
 const char *keycrypt_strerror(keycrypt_err_t kc_err);
 
-#ifdef CRYPTO_OPENSSL
-
-#define KEYCRYPT_ENABLED 1
+#if KEYCRYPT_ENABLED
 
 extern void keycrypt_base64_encode(const char *pIn, size_t InLen, char **ppOut,
 				   size_t *pOutLen);
@@ -49,7 +58,7 @@ extern void keycrypt_base64_encode(const char *pIn, size_t InLen, char **ppOut,
 extern void keycrypt_base64_decode(const char *pIn, size_t InLen, char **ppOut,
 				   size_t *pOutLen);
 
-#endif /* CRYPTO_OPENSSL */
+#endif /* KEYCRYPT_ENABLED */
 
 extern void keycrypt_init(void);
 

@@ -662,6 +662,12 @@ if test "$have_crypto" = "no" ; then
    AC_DEFINE([CRYPTO_INTERNAL], [1], [Compile with internal cryptographic implementation])
 fi
 
+AC_CHECK_LIB([gnutls], [gnutls_x509_privkey_import2], [have_gnutls=yes], [have_gnutls=no], [])
+if test "$have_gnutls" == "yes" ; then
+   LIBS="$LIBS -lgnutls"
+   AC_DEFINE([HAVE_GNUTLS], [1], [Compile with gnutls cryptographic support])
+fi
+
 AS_IF([test "$enable_clippy_only" != "yes"], [
 AC_CHECK_HEADERS([json-c/json.h])
 AC_CHECK_LIB([json-c], [json_object_get], [LIBS="$LIBS -ljson-c"], [], [-lm])
