@@ -32,7 +32,7 @@ from lib.lutil import luCommand
 
 CliOnFail = None
 # For debugging, uncomment the next line
-CliOnFail = 'tgen.mininet_cli'
+#CliOnFail = 'tgen.mininet_cli'
 
 RunTests = None
 
@@ -63,7 +63,7 @@ def test_check_routes0():
 def test_restart_r1():
     CheckFunc = 'ltemplateVersionCheck(\'4.1\', kernel=None)'
     #uncomment next line to start cli *before* script is run
-    #CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'
+    CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'
     ltemplateTest('scripts/restart-r1.py', False, CliOnFail, CheckFunc)
 
 def test_bgp_adjacencies1():

@@ -1,18 +1,21 @@
 from lutil import luCommand
 
+sleepTime = 6
+
 rtr = 'r2'
+daemons = ['bgpd','ospfd', 'zebra']
+
 luCommand(rtr,'ls -alt /etc/frr /var/run/frr','.','none')
-luCommand(rtr,'cat /var/run/frr/bgpd.pid','.','none')
-luCommand(rtr,'cat /var/run/frr/ospfd.pid','.','pre restart pid')
-luCommand(rtr,'kill `cat /var/run/frr/bgpd.pid`','.','none','kill bgpd')
-luCommand(rtr,'kill `cat /var/run/frr/ospfd.pid`','.','none','kill ospfd')
-luCommand(rtr,'ps `cat /var/run/frr/bgpd.pid` | wc -l ','1','wait','bgpd killed', 10)
-luCommand(rtr,'ps `cat /var/run/frr/ospfd.pid` | wc -l ','1','wait','ospfd killed', 10)
-luCommand(rtr,'/usr/lib/frr/bgpd -d','.','none','restart bgpd')
-luCommand(rtr,'/usr/lib/frr/ospfd -d','.','none','restart ospfd')
-luCommand(rtr,'ps `cat /var/run/frr/bgpd.pid` | wc -l ','2','wait','bgpd restarted', 10)
-luCommand(rtr,'ps `cat /var/run/frr/ospfd.pid` | wc -l ','2','wait','ospfd restarted', 10)
-luCommand(rtr,'cat /var/run/frr/bgpd.pid','.','none')
-luCommand(rtr,'cat /var/run/frr/ospfd.pid','.','none','post restart pid')
 
+for daemon in daemons:
+    luCommand(rtr,'cat /var/run/frr/%s.pid'%daemon,'.','pre restart pid')
+    luCommand(rtr,'cat /var/run/frr/%s.pid'%daemon,'.','none')
+    luCommand(rtr,'kill `cat /var/run/frr/%s.pid`'%daemon,'.','none','kill %s'%daemon)
+    luCommand(rtr,'ps `cat /var/run/frr/%s.pid` | wc -l '%daemon,'1','wait','%s killed'%daemon, 10)
 
+luCommand(rtr,'sleep %d; date'%sleepTime, ':', 'pass', 'Slept %d seconds'%sleepTime)
+
+for daemon in reversed(daemons):
+    luCommand(rtr,'/usr/lib/frr/%s -d'%daemon,'.','none','restart %s'%daemon)
+    luCommand(rtr,'ps `cat /var/run/frr/%s.pid` | wc -l '%daemon,'2','wait','%s restarted'%daemon, 10)
+    luCommand(rtr,'cat /var/run/frr/%s.pid'%daemon,'.','none','post restart pid')
