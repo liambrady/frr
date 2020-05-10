@@ -641,29 +641,92 @@ AC_ARG_ENABLE([memory-sanitizer],
 AC_ARG_ENABLE([undefined-sanitizer],
   AS_HELP_STRING([--undefined-sanitizer], [enable UndefinedBehaviorSanitizer support for detecting undefined behavior]))
 AC_ARG_WITH([crypto],
-  AS_HELP_STRING([--with-crypto=<internal|openssl>], [choose between different implementations of cryptographic functions(default value is --with-crypto=openssl)]))
+  AS_HELP_STRING([--with-crypto=<internal|openssl|libressl>], [choose between different implementations of cryptographic functions (default value is --with-crypto=openssl) May also need PKG_CONFIG_PATH]))
 AC_ARG_WITH([frr-format],
   AS_HELP_STRING([--with-frr-format[=<.../frr-format.so>]], [use frr-format GCC plugin]))
 
+#
+# May, 2020:
+# There has been some semantic drift of the term "crypto" as applied to FRR.
+# The original meaning seems to have applied to MD5 hashing functions only.
+# Now, we are also selecting a crypto library to use for RSA encryption.
+#
+# Further complicating matters, we now optionally support using the
+# libressl library. Libressl is a clone of openssl with almost the
+# same API and the same library/module names. They can not both be
+# installed in the default system location at the same time. The
+# significant difference detectable by the configure script is that
+# the version number of # openssl is 1.x whereas the version number
+# of libressl is 3.x
+#
+# To get this configure script to find a library (e.g., libressl) that
+# is installed in a non-standard location, specify the directory
+# containing the library's pkgconfig (.pc) file with PKG_CONFIG_PATH.
+# Example:
+#
+#	./configure PKG_CONFIG_PATH=/opt/libressl-3.1.1/lib/pkgconfig
+#
+# We will retain the original flags/semantics to avoid disrupting
+# the MD5-related code:
+#
+#	CRYPTO_INTERNAL		use internal MD5 (same as before)
+#	CRYPTO_OPENSSL		use openssl/libressl MD5 (same as before)
+#
+# We will add new flags. Zero, one, or more of these flags may be set:
+#
+#	HAVE_OPENSSL		libressl library found
+#	HAVE_LIBRESSL		libressl library found
+#	HAVE_GCRYPT		gcrypt library found
+#	HAVE_GNUTLS		gnutls library found
+#
+#
+
 #if openssl, else use the internal
-have_crypto="no"
-if test "$with_crypto" = "" || test "$with_crypto" = "openssl" ; then
-   AC_CHECK_LIB([crypto], [PEM_read_bio_PrivateKey], [have_crypto=yes], [have_crypto=no], [])
-   AC_CHECK_LIB([crypto], [EVP_MD_CTX_new], [] , [have_crypto=no], [])
-   AC_CHECK_LIB([crypto], [EVP_DigestInit], [] , [have_crypto=no], [])
-   if test "$have_crypto" == "yes" ; then
-      LIBS="$LIBS -lcrypto"
-      AC_DEFINE([CRYPTO_OPENSSL], [1], [Compile with openssl cryptographic support])
-   elif test "$with_crypto" != "" ; then
-      AC_MSG_ERROR([configuration specifies --with-crypto=openssl but up to date libcrypto not found])
+found_openssl_like="no"
+if test "$with_crypto" = "libressl" ; then
+   # NB the following PKG_CHECK_MODULES will cause LIBRESSL_LIBS and
+   # LIBRESSL_CFLAGS to be defined for Makefiles
+   PKG_CHECK_MODULES([LIBRESSL], [libcrypto >= 3], [
+      found_openssl_like="yes"
+      AC_DEFINE([HAVE_LIBRESSL], [1], [Compile with libressl cryptographic support])
+   ],[])
+   if test "$found_openssl_like" = "no" ; then
+      AC_MSG_ERROR([configuration specifies --with-crypto=libressl but libressl flavor of libcrypto not found])
    fi
 fi
-if test "$have_crypto" = "no" ; then
+if test "$with_crypto" = "openssl" ; then
+   PKG_CHECK_MODULES([OPENSSL], [libcrypto < 2], [
+      found_openssl_like="yes"
+      AC_DEFINE([HAVE_OPENSSL], [1], [Compile with openssl cryptographic support])
+   ],[])
+   if test "$found_openssl_like" = "no" ; then
+      AC_MSG_ERROR([configuration specifies --with-crypto=openssl but openssl flavor of libcrypto not found])
+   fi
+fi
+
+if test "$found_openssl_like" = "yes" ; then
+   AC_CHECK_LIB([crypto], [PEM_read_bio_PrivateKey], [], [found_openssl_like=no], [])
+   AC_CHECK_LIB([crypto], [EVP_MD_CTX_new], [] , [found_openssl_like=no], [])
+   AC_CHECK_LIB([crypto], [EVP_DigestInit], [] , [found_openssl_like=no], [])
+   if test "$found_openssl_like" = "yes" ; then
+      LIBS="$LIBS -lcrypto"
+      AC_DEFINE([CRYPTO_OPENSSL], [1], [Compile with openssl/libressl cryptographic support])
+   else
+      AC_MSG_ERROR([configuration specifies --with-crypto=openssl|libressl but required symbols not found])
+   fi
+fi
+if test "$found_openssl_like" = "no" ; then
    AC_DEFINE([CRYPTO_INTERNAL], [1], [Compile with internal cryptographic implementation])
 fi
 
+AC_CHECK_LIB([gcrypt], [gcry_sexp_build], [have_gcrypt=yes], [have_gcrypt=no], [])
+if test "$have_gcrypt" = "yes" ; then
+   LIBS="$LIBS -lgcrypt"
+   AC_DEFINE([HAVE_GCRYPT], [1], [Compile with gcrypt cryptographic support])
+fi
+
 AC_CHECK_LIB([gnutls], [gnutls_x509_privkey_import2], [have_gnutls=yes], [have_gnutls=no], [])
-if test "$have_gnutls" == "yes" ; then
+if test "$have_gnutls" = "yes" ; then
    LIBS="$LIBS -lgnutls"
    AC_DEFINE([HAVE_GNUTLS], [1], [Compile with gnutls cryptographic support])
 fi

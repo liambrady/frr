@@ -23,7 +23,7 @@
 #include <memory.h>
 
 #define KEYCRYPT_ENABLED 0
-#if defined CRYPTO_OPENSSL || defined(HAVE_GNUTLS)
+#if defined HAVE_OPENSSL || defined HAVE_LIBRE_SSL || defined HAVE_GNUTLS || defined HAVE_GCRYPT
 #undef KEYCRYPT_ENABLED
 #define KEYCRYPT_ENABLED 1
 #endif
@@ -45,6 +45,8 @@ typedef enum {
 	KC_ERR_KEYFILE_PATH,	/* can't generate keyfile path */
 	KC_ERR_KEYFILE_READ,	/* can't read keyfile */
 	KC_ERR_KEYFILE_PARSE,	/* can't parse keyfile */
+	KC_ERR_KEYFILE_EXISTS,	/* would overwrite existing keyfile */
+	KC_ERR_INTERNAL,	/* unexpected error */
 } keycrypt_err_t;
 /* clang-format on */
 

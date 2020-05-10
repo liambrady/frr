@@ -18,6 +18,7 @@
  */
 
 #include <zebra.h>
+#include <sbuf.h>
 
 #include "memory.h"
 #include "log.h"
@@ -29,19 +30,28 @@
 DEFINE_MTYPE(LIB, KEYCRYPT_CIPHER_B64, "keycrypt base64 encoded")
 DEFINE_MTYPE(LIB, KEYCRYPT_PLAIN_TEXT, "keycrypt plain text")
 
+/* this is for pre-release customers with passwords with oaep padding */
+#define KEYCRYPT_FALLBACK_OAEP_DECRYPT 0 /* not needed: stick with oaep */
+
+/* not compatible with oaep padding */
+#define KEYCRYPT_ENABLE_PKCS1_PADDING 0
+
 #if KEYCRYPT_ENABLED
 
 /*
  * normalize backend flag names
  */
-#if defined(HAVE_GNUTLS)
+#if 0 && defined(HAVE_GNUTLS)	/* currently has no oaep mode */
 #define KEYCRYPT_HAVE_GNUTLS 1
 #endif
-#if defined(CRYPTO_OPENSSL)
+#if defined(HAVE_OPENSSL) || defined(HAVE_LIBRESSL)
 #define KEYCRYPT_HAVE_OPENSSL 1
 #endif
+#if defined(HAVE_GCRYPT)
+#define KEYCRYPT_HAVE_GCRYPT 1
+#endif
 
-#if !defined(KEYCRYPT_HAVE_GNUTLS) && !defined(KEYCRYPT_HAVE_OPENSSL)
+#if !defined(KEYCRYPT_HAVE_GNUTLS) && !defined(KEYCRYPT_HAVE_OPENSSL) && !defined(KEYCRYPT_HAVE_GCRYPT)
 #error "KEYCRYPT_ENABLED set but no backend defined"
 #endif
 
@@ -59,6 +69,10 @@ DEFINE_MTYPE(LIB, KEYCRYPT_PLAIN_TEXT, "keycrypt plain text")
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/engine.h>
+#endif
+
+#ifdef KEYCRYPT_HAVE_GCRYPT
+#include <gcrypt.h>
 #endif
 
 /***********************************************************************
@@ -140,12 +154,15 @@ typedef keycrypt_err_t be_keyfile_read_status_t(
 	const char	*keyfile_path,
 	const char	**detail);
 
+typedef const char *be_version_string_t(void);
+
 typedef struct {
 	const char			*name;
 	be_encrypt_t			*f_encrypt;
 	be_decrypt_t			*f_decrypt;
 	be_test_cmd_t			*f_test_cmd;
 	be_keyfile_read_status_t	*f_keyfile_read_status;
+	be_version_string_t		*f_be_version_string;
 } keycrypt_backend_t;
 /* clang-format on */
 
@@ -160,9 +177,6 @@ typedef enum {
 	KEYCRYPT_FORMAT_PEM,
 	KEYCRYPT_FORMAT_PVK,
 } keycrypt_openssl_key_format_t;
-
-/* RSA_PKCS1_OAEP_PADDING seems not to be supported by gnutls */
-#define KC_OPENSSL_PADDING RSA_PKCS1_PADDING
 
 /*
  * To generate a suitable private key, use:
@@ -319,7 +333,8 @@ static void keycrypt_base64_decode_openssl(const char *pIn, size_t InLen,
  * (11 bits => 2 bytes?) than the key size.
  */
 /* clang-format off */
-static int keycrypt_encrypt_internal_openssl(
+static int keycrypt_encrypt_internal_openssl_padding(
+	int		paddingtype,			/* IN */
 	EVP_PKEY	*pKey,				/* IN */
 	struct memtype	*mt,	/* of CipherText */	/* IN */
 	const char	*pPlainText,			/* IN */
@@ -347,7 +362,7 @@ static int keycrypt_encrypt_internal_openssl(
 		return -1;
 	}
 
-	rc = EVP_PKEY_CTX_set_rsa_padding(ctx, KC_OPENSSL_PADDING);
+	rc = EVP_PKEY_CTX_set_rsa_padding(ctx, paddingtype);
 	if (rc <= 0) {
 		EVP_PKEY_CTX_free(ctx);
 		zlog_warn("%s: Error: EVP_PKEY_CTX_set_rsa_padding%s", __func__,
@@ -385,7 +400,6 @@ static int keycrypt_encrypt_internal_openssl(
 	return 0;
 }
 
-
 /*
  * Decrypt provided cipher text.
  *
@@ -395,7 +409,8 @@ static int keycrypt_encrypt_internal_openssl(
  * Return value is 0 if successful, non-0 for error
  */
 /* clang-format off */
-static int keycrypt_decrypt_internal_openssl(
+static int keycrypt_decrypt_internal_openssl_padding(
+	int		paddingtype,			/* IN */
 	EVP_PKEY	*pKey,				/* IN */
 	struct memtype	*mt,	/* of PlainText */	/* IN */
 	const char	*pCipherText,			/* IN */
@@ -423,7 +438,7 @@ static int keycrypt_decrypt_internal_openssl(
 		return -1;
 	}
 
-	rc = EVP_PKEY_CTX_set_rsa_padding(ctx, KC_OPENSSL_PADDING);
+	rc = EVP_PKEY_CTX_set_rsa_padding(ctx, paddingtype);
 	if (rc <= 0) {
 		EVP_PKEY_CTX_free(ctx);
 		zlog_warn("%s: Error: EVP_PKEY_CTX_set_rsa_padding%s", __func__,
@@ -529,7 +544,8 @@ end:
  * cipher text via XFREE(MTYPE_KEYCRYPT_CIPHER_B64, ptr)
  */
 /* clang-format off */
-static int keycrypt_encrypt_openssl(
+static int keycrypt_encrypt_openssl_padding(
+	int		paddingtype,		/* IN */
 	const char	*pPlainText,		/* IN */
 	size_t		PlainTextLen,		/* IN */
 	char		**ppCipherTextB64,	/* OUT */
@@ -546,9 +562,9 @@ static int keycrypt_encrypt_openssl(
 	if (!pKey)
 		return -1;
 
-	rc = keycrypt_encrypt_internal_openssl(
-		pKey, MTYPE_KEYCRYPT_CIPHER_TEXT, pPlainText, PlainTextLen,
-		&pCipherTextRaw, &CipherTextRawLen);
+	rc = keycrypt_encrypt_internal_openssl_padding(
+		paddingtype, pKey, MTYPE_KEYCRYPT_CIPHER_TEXT, pPlainText,
+		PlainTextLen, &pCipherTextRaw, &CipherTextRawLen);
 	if (rc)
 		return -1;
 
@@ -564,7 +580,38 @@ static int keycrypt_encrypt_openssl(
 }
 
 /* clang-format off */
-static int keycrypt_decrypt_openssl(
+static int keycrypt_encrypt_openssl_pkcs1(
+	const char	*pPlainText,		/* IN */
+	size_t		PlainTextLen,		/* IN */
+	char		**ppCipherTextB64,	/* OUT */
+	size_t		*pCipherTextB64Len)	/* OUT */
+{
+	return keycrypt_encrypt_openssl_padding(
+			RSA_PKCS1_PADDING,
+			pPlainText,
+			PlainTextLen,
+			ppCipherTextB64,
+			pCipherTextB64Len);
+}
+
+static int keycrypt_encrypt_openssl_oaep(
+	const char	*pPlainText,		/* IN */
+	size_t		PlainTextLen,		/* IN */
+	char		**ppCipherTextB64,	/* OUT */
+	size_t		*pCipherTextB64Len)	/* OUT */
+{
+	return keycrypt_encrypt_openssl_padding(
+			RSA_PKCS1_OAEP_PADDING,
+			pPlainText,
+			PlainTextLen,
+			ppCipherTextB64,
+			pCipherTextB64Len);
+}
+/* clang-format on */
+
+/* clang-format off */
+static int keycrypt_decrypt_openssl_padding(
+	int		paddingtype,			/* IN */
 	struct memtype	*mt,	/* of PlainText */	/* IN */
 	const char	*pCipherTextB64,		/* IN */
 	size_t		CipherTextB64Len,		/* IN */
@@ -585,9 +632,9 @@ static int keycrypt_decrypt_openssl(
 	keycrypt_base64_decode_openssl(pCipherTextB64, CipherTextB64Len,
 				       &pCipherTextRaw, &CipherTextRawLen);
 
-	rc = keycrypt_decrypt_internal_openssl(pKey, mt, pCipherTextRaw,
-					       CipherTextRawLen, ppPlainText,
-					       &PlainTextLen);
+	rc = keycrypt_decrypt_internal_openssl_padding(
+		paddingtype, pKey, mt, pCipherTextRaw, CipherTextRawLen,
+		ppPlainText, &PlainTextLen);
 
 	XFREE(MTYPE_KEYCRYPT_B64DEC, pCipherTextRaw);
 
@@ -600,8 +647,44 @@ static int keycrypt_decrypt_openssl(
 	return 0;
 }
 
-static int debug_keycrypt_test_cmd_openssl(struct vty *vty,
-					   const char *cleartext)
+/* clang-format off */
+static int keycrypt_decrypt_openssl_pkcs1(
+	struct memtype	*mt,	/* of PlainText */	/* IN */
+	const char	*pCipherTextB64,		/* IN */
+	size_t		CipherTextB64Len,		/* IN */
+	char		**ppPlainText,			/* OUT */
+	size_t		*pPlainTextLen)			/* OUT */
+{
+	return keycrypt_decrypt_openssl_padding(
+			RSA_PKCS1_PADDING,
+			mt,
+			pCipherTextB64,
+			CipherTextB64Len,
+			ppPlainText,
+			pPlainTextLen);
+}
+
+static int keycrypt_decrypt_openssl_oaep(
+	struct memtype	*mt,	/* of PlainText */	/* IN */
+	const char	*pCipherTextB64,		/* IN */
+	size_t		CipherTextB64Len,		/* IN */
+	char		**ppPlainText,			/* OUT */
+	size_t		*pPlainTextLen)			/* OUT */
+{
+	return keycrypt_decrypt_openssl_padding(
+			RSA_PKCS1_OAEP_PADDING,
+			mt,
+			pCipherTextB64,
+			CipherTextB64Len,
+			ppPlainText,
+			pPlainTextLen);
+}
+/* clang-format on */
+
+static int debug_keycrypt_test_cmd_openssl_padding(
+	int		paddingtype,
+	struct vty	*vty,
+	const char	*cleartext)
 {
 	char *keyfile_path = NULL;
 	EVP_PKEY *pKey;
@@ -630,9 +713,9 @@ static int debug_keycrypt_test_cmd_openssl(struct vty *vty,
 	}
 	XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
 
-	rc = keycrypt_encrypt_internal_openssl(pKey, MTYPE_KEYCRYPT_CIPHER_TEXT,
-					       cleartext, strlen(cleartext),
-					       &pCipherText, &CipherTextLen);
+	rc = keycrypt_encrypt_internal_openssl_padding(
+		RSA_PKCS1_PADDING, pKey, MTYPE_KEYCRYPT_CIPHER_TEXT, cleartext,
+		strlen(cleartext), &pCipherText, &CipherTextLen);
 	if (rc) {
 		EVP_PKEY_free(pKey);
 		vty_out(vty, "%s: Error: keycrypt_encrypt_internal_openssl\n",
@@ -673,9 +756,9 @@ static int debug_keycrypt_test_cmd_openssl(struct vty *vty,
 		CipherTextLen);
 
 
-	rc = keycrypt_decrypt_internal_openssl(pKey, MTYPE_KEYCRYPT_PLAIN_TEXT,
-					       pCipherText, CipherTextLen,
-					       &pClearText, &ClearTextLen);
+	rc = keycrypt_decrypt_internal_openssl_padding(
+		RSA_PKCS1_PADDING, pKey, MTYPE_KEYCRYPT_PLAIN_TEXT, pCipherText,
+		CipherTextLen, &pClearText, &ClearTextLen);
 
 	EVP_PKEY_free(pKey);
 
@@ -726,6 +809,22 @@ static int debug_keycrypt_test_cmd_openssl(struct vty *vty,
 	return CMD_SUCCESS;
 }
 
+static int debug_keycrypt_test_cmd_openssl_pkcs1(
+	struct vty	*vty,
+	const char	*cleartext)
+{
+	return debug_keycrypt_test_cmd_openssl_padding(RSA_PKCS1_PADDING,
+		vty, cleartext);
+}
+
+static int debug_keycrypt_test_cmd_openssl_oaep(
+	struct vty	*vty,
+	const char	*cleartext)
+{
+	return debug_keycrypt_test_cmd_openssl_padding(RSA_PKCS1_OAEP_PADDING,
+		vty, cleartext);
+}
+
 static keycrypt_err_t keyfile_read_status_openssl(const char *keyfile_path,
 						  const char **detail)
 {
@@ -743,13 +842,27 @@ static keycrypt_err_t keyfile_read_status_openssl(const char *keyfile_path,
 	return krc;
 }
 
+static const char *keycrypt_backend_version_string_openssl(void)
+{
+    return OpenSSL_version(OPENSSL_VERSION);
+}
+
 /* clang-format off */
-keycrypt_backend_t kbe_openssl = {
-	.name			= "openssl",
-	.f_encrypt		= keycrypt_encrypt_openssl,
-	.f_decrypt		= keycrypt_decrypt_openssl,
-	.f_test_cmd		= debug_keycrypt_test_cmd_openssl,
+keycrypt_backend_t kbe_openssl_pkcs1 = {
+	.name			= "openssl-pkcs1-padding",
+	.f_encrypt		= keycrypt_encrypt_openssl_pkcs1,
+	.f_decrypt		= keycrypt_decrypt_openssl_pkcs1,
+	.f_test_cmd		= debug_keycrypt_test_cmd_openssl_pkcs1,
 	.f_keyfile_read_status	= keyfile_read_status_openssl,
+	.f_be_version_string	= keycrypt_backend_version_string_openssl,
+};
+keycrypt_backend_t kbe_openssl_oaep = {
+	.name			= "openssl",
+	.f_encrypt		= keycrypt_encrypt_openssl_oaep,
+	.f_decrypt		= keycrypt_decrypt_openssl_oaep,
+	.f_test_cmd		= debug_keycrypt_test_cmd_openssl_oaep,
+	.f_keyfile_read_status	= keyfile_read_status_openssl,
+	.f_be_version_string	= keycrypt_backend_version_string_openssl,
 };
 /* clang-format on */
 
@@ -1010,7 +1123,7 @@ static int keycrypt_decrypt_internal_gnutls(
 		zlog_err("%s: error: %s returned %d: %s", __func__,
 			 "gnutls_privkey_decrypt_data", rc,
 			 gnutls_strerror(rc));
-		zlog_err(
+		zlog_debug(
 			"%s: datum_ciphertext.data %p, datum_ciphertext.size %u",
 			__func__, datum_ciphertext.data, datum_ciphertext.size);
 		return KC_ERR_DECRYPT;
@@ -1247,7 +1360,7 @@ static int debug_keycrypt_test_cmd_gnutls(
 		vty_out(vty, "%s: Error: %s returned %d: %s\n", __func__,
 			"keycrypt_base64_encode_gnutls", krc,
 			keycrypt_strerror(krc));
-		/* TBD does anything else need to be freed her? */
+		/* TBD does anything else need to be freed here? */
 		return CMD_SUCCESS;
 	}
 
@@ -1290,7 +1403,7 @@ static int debug_keycrypt_test_cmd_gnutls(
 	}
 
 	if (rc) {
-		vty_out(vty, "%s: Error: keycrypt_decrypt_internal_openssl\n",
+		vty_out(vty, "%s: Error: keycrypt_decrypt_internal_gnutls\n",
 			__func__);
 		if (pClearText)
 			XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pClearText);
@@ -1299,7 +1412,7 @@ static int debug_keycrypt_test_cmd_gnutls(
 
 	if (!pClearText) {
 		vty_out(vty,
-			"%s: keycrypt_decrypt_internal_openssl didn't return clear text pointer\n",
+			"%s: keycrypt_decrypt_internal_gnutls didn't return clear text pointer\n",
 			__func__);
 		return CMD_SUCCESS;
 	}
@@ -1340,17 +1453,1190 @@ static keycrypt_err_t keyfile_read_status_gnutls(const char *keyfile_path,
 	return krc;
 }
 
+static const char *keycrypt_backend_version_string_gnutls(void)
+{
+    return gnutls_check_version(NULL);
+}
+
 /* clang-format off */
-keycrypt_backend_t kbe_gnutls = {
-	.name			= "gnutls",
+keycrypt_backend_t kbe_gnutls_pkcs1 = {
+	.name			= "gnutls-pkcs1-padding",
 	.f_encrypt		= keycrypt_encrypt_gnutls,
 	.f_decrypt		= keycrypt_decrypt_gnutls,
 	.f_test_cmd		= debug_keycrypt_test_cmd_gnutls,
 	.f_keyfile_read_status	= keyfile_read_status_gnutls,
+	.f_be_version_string	= keycrypt_backend_version_string_gnutls,
 };
 /* clang-format on */
 
 #endif /* KEYCRYPT_HAVE_GNUTLS */
+
+/***********************************************************************
+ *		libgcrypt-specific functions
+ ***********************************************************************/
+
+#if defined KEYCRYPT_HAVE_GCRYPT
+
+/*
+ * Based on libgcrypt-1.5.8 tests/fipsdrv.c read_private_key_file()
+ */
+
+/* clang-format off */
+static unsigned char const asctobin[128] =
+{
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3e, 0xff, 0xff, 0xff, 0x3f,
+    0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+    0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12,
+    0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24,
+    0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30,
+    0x31, 0x32, 0x33, 0xff, 0xff, 0xff, 0xff, 0xff
+};
+
+static const unsigned char bintoasc[64+1] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789+/";
+
+/* clang-format on */
+
+/* clang-format off */
+static keycrypt_err_t keycrypt_base64_decode_gcrypt(
+	const char	*pB64,
+	size_t		B64Length,
+	char		**ppData,
+	size_t		*pDataLength)
+/* clang-format on */
+{
+	struct sbuf data;
+	size_t length;
+	const char *s;
+	uint8_t val = 0;
+	uint idx = 0;
+	int c = 0;
+
+	sbuf_init(&data, NULL, 0); /* MTYPE_TMP */
+
+	for (s = pB64, length = B64Length; length; length--, s++) {
+	    if (isspace(*s))
+		continue;
+	    if (*s == '=') {
+		/* Pad character: stop */
+		if (idx == 1)
+		    sbuf_push(&data, 0, "%c", val);
+		break;
+	    }
+	    if ( (*s & 0x80) || (c = asctobin[*(unsigned char *)s]) == 0xff) {
+		sbuf_free(&data);
+		return KC_ERR_BASE64;
+	    }
+
+	    switch (idx) {
+	    case 0:
+		val = c << 2;
+		break;
+	    case 1:
+		val |= (c>>4)&3;
+		sbuf_push(&data, 0, "%c", val);
+		val = (c<<4)&0xf0;
+		break;
+	    case 2:
+		val |= (c>>2)&15;
+		sbuf_push(&data, 0, "%c", val);
+		val = (c<<6)&0xc0;
+		break;
+	    case 3:
+		val |= c&0x3f;
+		sbuf_push(&data, 0, "%c", val);
+		break;
+	    }
+	    idx = (idx+1) % 4;
+	}
+
+	*ppData = XMALLOC(MTYPE_KEYCRYPT_B64DEC, data.pos + 1);
+	memcpy(*ppData, sbuf_buf(&data), data.pos);
+	*(*ppData + data.pos) = '\0';
+	*pDataLength = data.pos;
+	sbuf_free(&data);
+	return KC_OK;
+}
+
+/* clang-format off */
+static keycrypt_err_t keycrypt_base64_encode_gcrypt(
+	const char	*pIn,
+	size_t		InLen,
+	char		**ppOut,
+	size_t		*pOutLen)
+{
+	struct sbuf	data;
+	const uint8_t	*p;
+	uint8_t		inbuf[4];
+	char		outbuf[4];
+	int		idx;
+	int		quads;
+	size_t		length;
+	/* clang-format on */
+
+	sbuf_init(&data, NULL, 0); /* MTYPE_TMP */
+
+	idx = quads = 0;
+	length = InLen;
+	for (p = (const uint8_t *)pIn; length; p++, length--) {
+		inbuf[idx++] = *p;
+		if (idx > 2) {
+			/* clang-format off */
+			outbuf[0] = bintoasc[(*inbuf>>2)&077];
+			outbuf[1] = bintoasc[(((*inbuf<<4)&060)
+						|((inbuf[1] >> 4)&017))&077];
+			outbuf[2] = bintoasc[(((inbuf[1]<<2)&074)
+						|((inbuf[2]>>6)&03))&077];
+			outbuf[3] = bintoasc[inbuf[2]&077];
+			/* clang-format on */
+			sbuf_push(&data, 0, "%c%c%c%c", outbuf[0], outbuf[1],
+				outbuf[2], outbuf[3]);
+			idx = 0;
+			if (++quads >= (64/4)) {
+#ifdef KC_GCRYPT_B64_USE_NEWLINES	/* openssl b64 decode doesn't like */
+				sbuf_push(&data, 0, "\n");
+#endif
+				quads = 0;
+			}
+		}
+	}
+	if (idx) {
+		/* clang-format off */
+		outbuf[0] = bintoasc[(*inbuf>>2)&077];
+		if (idx == 1) {
+			outbuf[1] = bintoasc[((*inbuf<<4)&060)&077];
+			outbuf[2] = outbuf[3] = '=';
+		} else {
+			outbuf[1] = bintoasc[(((*inbuf<<4)&060)
+						|((inbuf[1]>>4)&017))&077];
+			outbuf[2] = bintoasc[((inbuf[1]<<2)&074)&077];
+			outbuf[3] = '=';
+		}
+		/* clang-format on */
+		sbuf_push(&data, 0, "%c%c%c%c", outbuf[0], outbuf[1],
+			outbuf[2], outbuf[3]);
+		quads++;
+	}
+#ifdef KC_GCRYPT_B64_USE_NEWLINES
+	if (quads)
+		sbuf_push(&data, 0, "\n");
+#endif
+
+	*ppOut = XMALLOC(MTYPE_KEYCRYPT_CIPHER_B64, data.pos + 1);
+	memcpy(*ppOut, sbuf_buf(&data), data.pos);
+	*(*ppOut + data.pos) = '\0';
+	*pOutLen = data.pos;
+	sbuf_free(&data);
+	return KC_OK;
+}
+
+/* ASN.1 classes.  */
+enum
+{
+  UNIVERSAL = 0,
+  APPLICATION = 1,
+  ASNCONTEXT = 2,
+  PRIVATE = 3
+};
+
+/* ASN.1 tags.  */
+enum
+{
+  TAG_NONE = 0,
+  TAG_BOOLEAN = 1,
+  TAG_INTEGER = 2,
+  TAG_BIT_STRING = 3,
+  TAG_OCTET_STRING = 4,
+  TAG_NULL = 5,
+  TAG_OBJECT_ID = 6,
+  TAG_OBJECT_DESCRIPTOR = 7,
+  TAG_EXTERNAL = 8,
+  TAG_REAL = 9,
+  TAG_ENUMERATED = 10,
+  TAG_EMBEDDED_PDV = 11,
+  TAG_UTF8_STRING = 12,
+  TAG_REALTIVE_OID = 13,
+  TAG_SEQUENCE = 16,
+  TAG_SET = 17,
+  TAG_NUMERIC_STRING = 18,
+  TAG_PRINTABLE_STRING = 19,
+  TAG_TELETEX_STRING = 20,
+  TAG_VIDEOTEX_STRING = 21,
+  TAG_IA5_STRING = 22,
+  TAG_UTC_TIME = 23,
+  TAG_GENERALIZED_TIME = 24,
+  TAG_GRAPHIC_STRING = 25,
+  TAG_VISIBLE_STRING = 26,
+  TAG_GENERAL_STRING = 27,
+  TAG_UNIVERSAL_STRING = 28,
+  TAG_CHARACTER_STRING = 29,
+  TAG_BMP_STRING = 30
+};
+
+/* ASN.1 Parser object.  */
+struct tag_info
+{
+  int class;             /* Object class.  */
+  unsigned long tag;     /* The tag of the object.  */
+  unsigned long length;  /* Length of the values.  */
+  int nhdr;              /* Length of the header (TL).  */
+  unsigned int ndef:1;   /* The object has an indefinite length.  */
+  unsigned int cons:1;   /* This is a constructed object.  */
+};
+
+static int keycrypt_parse_tag_gcrypt(
+	unsigned char const **buffer,
+	size_t *buflen,
+	struct tag_info *ti)
+{
+  int c;
+  unsigned long tag;
+  const unsigned char *buf = *buffer;
+  size_t length = *buflen;
+
+  ti->length = 0;
+  ti->ndef = 0;
+  ti->nhdr = 0;
+
+  /* Get the tag */
+  if (!length)
+    return -1; /* Premature EOF.  */
+  c = *buf++; length--;
+  ti->nhdr++;
+
+  ti->class = (c & 0xc0) >> 6;
+  ti->cons  = !!(c & 0x20);
+  tag       = (c & 0x1f);
+
+  if (tag == 0x1f)
+    {
+      tag = 0;
+      do
+        {
+          tag <<= 7;
+          if (!length)
+            return -1; /* Premature EOF.  */
+          c = *buf++; length--;
+          ti->nhdr++;
+          tag |= (c & 0x7f);
+        }
+      while ( (c & 0x80) );
+    }
+  ti->tag = tag;
+
+  /* Get the length */
+  if (!length)
+    return -1; /* Premature EOF. */
+  c = *buf++; length--;
+  ti->nhdr++;
+
+  if ( !(c & 0x80) )
+    ti->length = c;
+  else if (c == 0x80)
+    ti->ndef = 1;
+  else if (c == 0xff)
+    return -1; /* Forbidden length value.  */
+  else
+    {
+      unsigned long len = 0;
+      int count = c & 0x7f;
+
+      for (; count; count--)
+        {
+          len <<= 8;
+          if (!length)
+            return -1; /* Premature EOF.  */
+          c = *buf++; length--;
+          ti->nhdr++;
+          len |= (c & 0xff);
+        }
+      ti->length = len;
+    }
+
+  if (ti->class == UNIVERSAL && !ti->tag)
+    ti->length = 0;
+
+  if (ti->length > length)
+    return -1; /* Data larger than buffer.  */
+
+  *buffer = buf;
+  *buflen = length;
+  return 0;
+}
+
+/*
+ * Caller must free returned MTYPE_TMP buffer
+ */
+/* clang-format off */
+static keycrypt_err_t keycrypt_unwrap_pem_file(
+	const char	*filename,
+	char		**ppBuf,
+	size_t		*pLength)
+/* clang-format on */
+{
+	FILE *fp;
+	char buf[BUFSIZ];
+	bool seenbegin = false;
+	struct sbuf data;
+
+	fp = fopen(filename, "rb");
+	if (!fp) {
+		zlog_err("%s: fopen(\"%s\"): %m", __func__, filename);
+		return KC_ERR_KEYFILE_READ;
+	}
+	sbuf_init(&data, NULL, 0); /* MTYPE_TMP */
+	while (fgets(buf, BUFSIZ, fp)) {
+		if (!strncmp(buf, "-----END ", 9)) {
+			break;
+		}
+		if (seenbegin) {
+		    sbuf_push(&data, 0, "%s", buf);
+		}
+		if (!strncmp(buf, "-----BEGIN ", 11)) {
+			seenbegin = true;
+			continue;
+		}
+	}
+	fclose(fp);
+
+	*ppBuf = XCALLOC(MTYPE_KEYCRYPT_CIPHER_B64, data.pos+1);
+	memcpy(*ppBuf, sbuf_buf(&data), data.pos);
+	*(*ppBuf + data.pos) = '\0';
+	*pLength = data.pos;
+	sbuf_free(&data);
+
+	return KC_OK;
+}
+
+/* clang-format off */
+static keycrypt_err_t keycrypt_parse_privkey_asn1(
+	const unsigned char	*pAsn1,
+	size_t			Asn1Length,
+	gcry_sexp_t		*ppPrivKey,	/* caller must free */
+	gcry_sexp_t		*ppPubKey)	/* caller must free */
+{
+	const unsigned char	*der;
+	size_t			derlen;
+	struct tag_info		ti;
+	gcry_mpi_t		keyparms[8];
+	int			n_keyparms = 8;
+	gcry_sexp_t		s_key_private;
+	gcry_sexp_t		s_key_public;
+	uint8_t			idx;
+	gcry_error_t		err;
+	int			rc;
+/* clang-format on */
+
+	/* Parse the ASN.1 structure. */
+	der = (const unsigned char*)pAsn1;
+	derlen = Asn1Length;
+
+	if (keycrypt_parse_tag_gcrypt(&der, &derlen, &ti) ||
+	    ti.tag != TAG_SEQUENCE || ti.class || !ti.cons || ti.ndef) {
+		zlog_debug("%s: %s 1 error", __func__,
+			"keycrypt_parse_tag_gcrypt");
+		goto bad_asn1;
+	}
+	zlog_debug("%s: tag %lu, length %lu", __func__, ti.tag, ti.length);
+	if (keycrypt_parse_tag_gcrypt(&der, &derlen, &ti) ||
+	    ti.tag != TAG_INTEGER || ti.class || ti.cons || ti.ndef) {
+		zlog_debug("%s: %s 2 error", __func__,
+			"keycrypt_parse_tag_gcrypt");
+		goto bad_asn1;
+	}
+	zlog_debug("%s: tag %lu, length %lu", __func__, ti.tag, ti.length);
+	if (ti.length != 1 || *der) {
+	    zlog_debug("%s: value of the first integer is not 0", __func__);
+	    goto bad_asn1;  /* The value of the first integer is not 0. */
+	}
+	der += ti.length; derlen -= ti.length;
+
+	for (idx=0; idx < n_keyparms; idx++) {
+	    rc = keycrypt_parse_tag_gcrypt(&der, &derlen, &ti);
+	    if (rc ||
+		ti.tag != TAG_INTEGER || ti.class || ti.cons || ti.ndef) {
+		    zlog_debug("%s: idx %u error, rc %d", __func__, idx, rc);
+		    if (!rc) {
+			zlog_debug("  tag %lu, class %d, cons %d, ndef %d",
+			    ti.tag,  ti.class, ti.cons, ti.ndef);
+		    }
+		    goto bad_asn1;
+	    }
+#if 0
+	    if (show) {
+		char prefix[2];
+		prefix[0] = idx < 8? "nedpq12u"[idx] : '?';
+		prefix[1] = 0;
+		showhex (prefix, der, ti.length);
+	    }
+#endif
+	    err = gcry_mpi_scan(keyparms+idx, GCRYMPI_FMT_USG, der, ti.length,NULL);
+	    if (err) {
+		zlog_err("%s: error scanning RSA parameter %d: %s\n",
+			__func__, idx, gpg_strerror (err));
+		goto error;
+	    }
+	    der += ti.length; derlen -= ti.length;
+	}
+	if (idx != n_keyparms) {
+	    zlog_err("%s: not enough RSA key parameters", __func__);
+	    goto error;
+	}
+
+	/*
+	 * Convert from OpenSSL parameter ordering to the OpenPGP order.
+	 * First check that p < q; if not swap p and q and recompute u.
+	 */
+	if (gcry_mpi_cmp (keyparms[3], keyparms[4]) > 0) {
+		gcry_mpi_swap (keyparms[3], keyparms[4]);
+		gcry_mpi_invm (keyparms[7], keyparms[3], keyparms[4]);
+	}
+
+	/* Build private key S-expression. */
+	/* clang-format off */
+	err = gcry_sexp_build (&s_key_private, NULL,
+	    "(private-key(rsa(n%m)(e%m)"
+	    /**/            "(d%m)(p%m)(q%m)(u%m)))",
+	    keyparms[0], keyparms[1], keyparms[2],
+	    keyparms[3], keyparms[4], keyparms[7] );
+	/* clang-format on */
+
+	if (err) {
+	    for (idx=0; idx < n_keyparms; idx++)
+		gcry_mpi_release (keyparms[idx]);
+	    zlog_err("%s: error building private-key S-expression: %s",
+		__func__, gpg_strerror(err));
+	    return KC_ERR_KEYFILE_PARSE;
+	}
+
+	/* Build public key S-expression */
+	/* clang-format off */
+	err = gcry_sexp_build (&s_key_public, NULL,
+	    "(public-key(rsa(n%m)(e%m)))",
+	    keyparms[0], keyparms[1]);
+	/* clang-format on */
+
+	/* get this out of the way before possible error return */
+	for (idx=0; idx < n_keyparms; idx++)
+	    gcry_mpi_release (keyparms[idx]);
+
+	if (err) {
+	    /* TBD free s_key_private */
+	    zlog_err("%s: error building private-key S-expression: %s",
+		__func__, gpg_strerror(err));
+	    return KC_ERR_KEYFILE_PARSE;
+	}
+
+	*ppPrivKey = s_key_private;
+	*ppPubKey = s_key_public;
+
+	return KC_OK;
+
+bad_asn1:
+	zlog_err("%s: invalid ASN.1 structure", __func__);
+error:
+	return KC_ERR_KEYFILE_PARSE;
+}
+
+/* clang-format off */
+static keycrypt_err_t kc_parse_pem_privkey_asn1(
+	char			*pAsn1,
+	size_t			Asn1Length,
+	gcry_sexp_t		*ppPrivKey,	/* caller must free */
+	gcry_sexp_t		*ppPubKey)	/* caller must free */
+{
+	const unsigned char	*der;
+	size_t			derlen;
+	struct tag_info		ti;
+/* clang-format on */
+
+	/*
+	 * % openssl asn1parse -in ~/.ssh/frr
+	 *  0:d=0  hl=4 l=1214 cons: SEQUENCE          
+	 *  4:d=1  hl=2 l=   1 prim: INTEGER           :00
+	 *  7:d=1  hl=2 l=  13 cons: SEQUENCE          
+	 *  9:d=2  hl=2 l=   9 prim: OBJECT            :rsaEncryption
+	 * 20:d=2  hl=2 l=   0 prim: NULL              
+	 * 22:d=1  hl=4 l=1192 prim: OCTET STRING      [HEX DUMP]:[bytes...]
+	 *
+	 * The octet string is the private key, which should be asn1-parsed
+	 */
+
+	/*
+	 * Get to the octet string
+	 */
+
+	/* first we should see an integer */
+
+	der = (const unsigned char*)pAsn1;
+	derlen = Asn1Length;
+
+	/* This sequence should enclose everything */
+	if (keycrypt_parse_tag_gcrypt(&der, &derlen, &ti) ||
+	    ti.tag != TAG_SEQUENCE || ti.class || !ti.cons || ti.ndef) {
+		zlog_debug("%s: %s 1 error", __func__,
+			"keycrypt_parse_tag_gcrypt");
+		return KC_ERR_KEYFILE_PARSE;
+	}
+	zlog_debug("%s: tag %lu, length %lu", __func__, ti.tag, ti.length);
+
+	/* integer: version 0 */
+	if (keycrypt_parse_tag_gcrypt(&der, &derlen, &ti) ||
+	    ti.tag != TAG_INTEGER || ti.class || ti.cons || ti.ndef) {
+		zlog_debug("%s: %s 2 error", __func__,
+			"keycrypt_parse_tag_gcrypt");
+		return KC_ERR_KEYFILE_PARSE;
+	}
+	zlog_debug("%s: tag %lu, length %lu", __func__, ti.tag, ti.length);
+	if (ti.length != 1 || *der) {
+	    zlog_debug("%s: value of the first integer is not 0", __func__);
+	    return KC_ERR_KEYFILE_PARSE;  /* The value of the first integer is not 0. */
+	}
+	der += ti.length; derlen -= ti.length;	/* go past value */
+
+	/* This sequence should enclose the algorithm id and any params */
+	if (keycrypt_parse_tag_gcrypt(&der, &derlen, &ti) ||
+	    ti.tag != TAG_SEQUENCE || ti.class || !ti.cons || ti.ndef) {
+		zlog_debug("%s: %s 3 error", __func__,
+			"keycrypt_parse_tag_gcrypt");
+		return KC_ERR_KEYFILE_PARSE;
+	}
+	zlog_debug("%s: tag %lu, length %lu", __func__, ti.tag, ti.length);
+
+	{
+	    /* look at enclosed object ID to ensure it is "rsaEncryption" */
+	    const unsigned char	*der_inner = der;
+	    size_t		derlen_inner = ti.length;
+	    struct tag_info	ti_inner;
+	    bool		is_rsaEncryption = false;
+
+	    while (!keycrypt_parse_tag_gcrypt(&der_inner, &derlen_inner,
+		    &ti_inner)) {
+
+		if (ti_inner.tag == TAG_OBJECT_ID && ti_inner.length == 9) {
+		    const unsigned char *p = der_inner;
+		    zlog_debug("%s: examining oid", __func__);
+		    zlog_debug("  %02x%02x%02x%02x %02x%02x%02x%02x %02x",
+			p[0], p[1], p[2], p[3],
+			p[4], p[5], p[6], p[7],
+			p[8]);
+		    /*
+		     * 1.2.840.113549.1.1.1 is "rsaEncryption"
+		     * which is encoded as 06 09 2A 86 48 86 F7 0D 01 01 01
+		     * Type 0x06 = TAG_OBJECT_ID
+		     * Len 0x09
+		     * 
+		     */
+		    if (!memcmp(p, "\x2a\x86\x48\x86\xf7\x0d\x01\x01\x01",
+			ti_inner.length))
+			    is_rsaEncryption = true;
+		}
+		der_inner += ti_inner.length;
+		derlen_inner -= ti_inner.length;
+	    }
+
+	    if (!is_rsaEncryption) {
+		zlog_err("%s: rsaEncryption objectID not found", __func__);
+		return KC_ERR_KEYFILE_PARSE;
+	    }
+	}
+	der += ti.length; derlen -= ti.length;	/* skip oid sequence value */
+
+	/* This sequence should enclose the algorithm id and any params */
+	if (keycrypt_parse_tag_gcrypt(&der, &derlen, &ti) ||
+	    ti.tag != TAG_OCTET_STRING || ti.class || ti.cons || ti.ndef) {
+		zlog_debug("%s: %s 4 error", __func__,
+			"keycrypt_parse_tag_gcrypt");
+		return KC_ERR_KEYFILE_PARSE;
+	}
+	zlog_debug("%s: tag %lu, length %lu", __func__, ti.tag, ti.length);
+
+	/*
+	 * Now we're lined up at the octet stream
+	 */
+	return keycrypt_parse_privkey_asn1(der, derlen, ppPrivKey, ppPubKey);
+}
+
+/* clang-format off */
+static keycrypt_err_t keycrypt_read_keyfile_gcrypt(
+	const char		*filename,
+	gcry_sexp_t		*ppPrivKey,	/* caller must free */
+	gcry_sexp_t		*ppPubKey)	/* caller must free */
+{
+	keycrypt_err_t		krc;
+	char			*pB64 = NULL;
+	size_t			B64Length;
+	char			*pAsn1;
+	size_t			Asn1Length;
+/* clang-format on */
+
+	/* get buffer that is base64-encoded contents of PEM file */
+	krc = keycrypt_unwrap_pem_file(filename, &pB64, &B64Length);
+	if (krc)
+	    return krc;
+
+	/* base64 decode key */
+	krc = keycrypt_base64_decode_gcrypt(
+		pB64, B64Length, &pAsn1, &Asn1Length);
+	XFREE(MTYPE_KEYCRYPT_CIPHER_B64, pB64);
+	if (krc)
+		return krc;
+
+	zlog_debug("%s: B64Length %zu, Asn1Length %zu", __func__,
+		B64Length, Asn1Length);
+
+	/*
+	 * parse asn1 structure
+	 */
+	krc = kc_parse_pem_privkey_asn1(pAsn1, Asn1Length, ppPrivKey, ppPubKey);
+
+	XFREE(MTYPE_KEYCRYPT_B64DEC, pAsn1);
+	return krc;
+}
+
+static keycrypt_err_t
+keycrypt_read_default_keyfile_gcrypt(
+	gcry_sexp_t	*ppPrivKey,
+	gcry_sexp_t	*ppPubKey)
+{
+	keycrypt_err_t rc;
+	char *keyfile_path;
+
+	*ppPrivKey = NULL;
+
+	keyfile_path = keycrypt_keyfile_path();
+	if (!keyfile_path) {
+		zlog_err("%s: Error: can't compute keyfile path\n", __func__);
+		return KC_ERR_KEYFILE_PATH;
+	}
+
+	rc = keycrypt_read_keyfile_gcrypt(keyfile_path, ppPrivKey, ppPubKey);
+	if (rc) {
+		zlog_err("%s: Error: %s can't read \"%s\"\n", __func__,
+			 "keycrypt_read_keyfile_gcrypt", keyfile_path);
+		XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+		return rc;
+	}
+
+	XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+	return KC_OK;
+}
+
+/*
+ * Caller should not free returned keys
+ */
+static void keycrypt_get_pkey_gcrypt(
+	gcry_sexp_t	*ppPrivKey,
+	gcry_sexp_t	*ppPubKey)
+{
+	static time_t		keycrypt_pkey_check_time;
+	static gcry_sexp_t	pCachedPrivKey;
+	static gcry_sexp_t	pCachedPubKey;
+	time_t now;
+
+	now = monotime(NULL);
+	if (now - keycrypt_pkey_check_time > KEYCRYPT_CHECK_PKEY_SECONDS) {
+		keycrypt_err_t rc;
+		gcry_sexp_t	pPrivKey;
+		gcry_sexp_t	pPubKey;
+
+		keycrypt_pkey_check_time = now;
+
+		rc = keycrypt_read_default_keyfile_gcrypt(&pPrivKey, &pPubKey);
+		if (rc != KC_OK)
+			goto end;
+
+		if (pCachedPrivKey)
+			gcry_sexp_release(pCachedPrivKey);
+		if (pCachedPubKey)
+			gcry_sexp_release(pCachedPubKey);
+
+		pCachedPrivKey = pPrivKey;
+		pCachedPubKey = pPubKey;
+	}
+end:
+	*ppPrivKey = pCachedPrivKey;
+	*ppPubKey = pCachedPubKey;
+}
+
+/* clang-format off */
+static int keycrypt_encrypt_internal_gcrypt_padding(
+	bool			use_pkcs1_padding,		/* 0: oaep */
+	gcry_sexp_t		pPubKey,			/* IN */
+	struct memtype		*mt,	/* of CipherText */	/* IN */
+	const char		*pPlainText,			/* IN */
+	size_t			PlainTextLen,			/* IN */
+	char			**ppCipherText,			/* OUT */
+	size_t			*pCipherTextLen)		/* OUT */
+{
+	gcry_error_t		grc;
+	gcry_sexp_t		s_ciphertext;
+	gcry_sexp_t		s_plaintext;
+	gcry_buffer_t		b_ciphertext;
+/* clang-format on */
+
+	grc = gcry_sexp_build(&s_plaintext, NULL, "(data(flags %s)(value %b))",
+		(use_pkcs1_padding? "pkcs1": "oaep"),
+		PlainTextLen, pPlainText);
+	if (grc) {
+		zlog_err("%s: Error: gcry_sexp_build(s_plaintext): %s",
+			__func__, gpg_strerror(grc));
+		return KC_ERR_DECRYPT;
+	}
+	grc = gcry_pk_encrypt(&s_ciphertext, s_plaintext, pPubKey);
+	gcry_sexp_release(s_plaintext);
+	if (grc) {
+		zlog_err("%s: Error: gcry_pk_encrypt(s_ciphertext): %s",
+			__func__, gpg_strerror(grc));
+		return KC_ERR_DECRYPT;
+	}
+
+	/*
+	 * extract plaintext from s-expression
+	 */
+	memset(&b_ciphertext, 0, sizeof(b_ciphertext));
+	grc = gcry_sexp_extract_param(s_ciphertext, NULL,
+		"&'a'", &b_ciphertext, NULL);
+	gcry_sexp_release(s_ciphertext);
+	if (grc) {
+		zlog_err("%s: Error: %s: %s", __func__,
+			"gcry_sexp_extract_param", gpg_strerror(grc));
+		return -1;
+	}
+
+	/*
+	 * Copy ciphertext to FRR buffer
+	 */
+	*ppCipherText = XCALLOC(mt, b_ciphertext.len + 1);
+	*pCipherTextLen = b_ciphertext.len;
+	memcpy(*ppCipherText, ((char *)b_ciphertext.data) + b_ciphertext.off,
+		b_ciphertext.len);
+	*(*ppCipherText + b_ciphertext.len) = 0;
+	if (b_ciphertext.data)
+		gcry_free(b_ciphertext.data);
+
+	return KC_OK;
+}
+
+/* clang-format off */
+static int keycrypt_decrypt_internal_gcrypt_padding(
+	bool			use_pkcs1_padding,		/* 0: oaep */
+	gcry_sexp_t		pPrivKey,			/* IN */
+	struct memtype		*mt,	/* of PlainText */	/* IN */
+	const char		*pCipherText,			/* IN */
+	size_t			CipherTextLen,			/* IN */
+	char			**ppPlainText,			/* OUT */
+	size_t			*pPlainTextLen)			/* OUT */
+{
+	gcry_error_t		grc;
+	gcry_sexp_t		s_ciphertext;
+	gcry_sexp_t		s_plaintext;
+	gcry_buffer_t		b_plaintext;
+/* clang-format on */
+
+	grc = gcry_sexp_build(&s_ciphertext, NULL,
+		"(enc-val(flags %s)(rsa(a%b)))",
+		(use_pkcs1_padding? "pkcs1": "oaep"),
+		CipherTextLen, pCipherText);
+	if (grc) {
+		zlog_err("%s: Error: gcry_sexp_build(s_ciphertext): %s",
+			__func__, gpg_strerror(grc));
+		return KC_ERR_DECRYPT;
+	}
+	grc = gcry_pk_decrypt(&s_plaintext, s_ciphertext, pPrivKey);
+	gcry_sexp_release(s_ciphertext);
+	if (grc) {
+		zlog_err("%s: Error: gcry_pk_decrypt(s_ciphertext): %s",
+			__func__, gpg_strerror(grc));
+		return KC_ERR_DECRYPT;
+	}
+
+	/*
+	 * extract plaintext from s-expression
+	 */
+	memset(&b_plaintext, 0, sizeof(b_plaintext));
+	grc = gcry_sexp_extract_param(s_plaintext, NULL,
+		"&'value'", &b_plaintext, NULL);
+	gcry_sexp_release(s_plaintext);
+	if (grc) {
+		zlog_err("%s: Error: %s: %s", __func__,
+			"gcry_sexp_extract_param", gpg_strerror(grc));
+		return -1;
+	}
+
+	/*
+	 * Copy plaintext to FRR buffer
+	 */
+	*ppPlainText = XCALLOC(mt, b_plaintext.len + 1);
+	*pPlainTextLen = b_plaintext.len;
+	memcpy(*ppPlainText, ((char *)b_plaintext.data) + b_plaintext.off,
+		b_plaintext.len);
+	*(*ppPlainText + b_plaintext.len) = 0;
+	if (b_plaintext.data)
+		gcry_free(b_plaintext.data);
+
+	return KC_OK;
+}
+
+/*
+ * After successful return (0), caller MUST free base-64 encoded
+ * cipher text via XFREE(MTYPE_KEYCRYPT_CIPHER_B64, ptr)
+ */
+/* clang-format off */
+static int keycrypt_encrypt_gcrypt_padding(
+	bool		use_pkcs1_padding,	/* 0: oaep */
+	const char	*pPlainText,		/* IN */
+	size_t		PlainTextLen,		/* IN */
+	char		**ppCipherTextB64,	/* OUT */
+	size_t		*pCipherTextB64Len)	/* OUT */
+{
+	gcry_sexp_t		pPrivKey;
+	gcry_sexp_t		pPubKey;
+	int			rc;
+	keycrypt_err_t		krc;
+	char			*pCipherTextRaw;
+	size_t			CipherTextRawLen = 0;
+	size_t			B64len = 0;
+	/* clang-format on */
+
+	keycrypt_get_pkey_gcrypt(&pPrivKey, &pPubKey);
+	if (!pPubKey)
+		return -1;
+
+	rc = keycrypt_encrypt_internal_gcrypt_padding(use_pkcs1_padding,
+		pPubKey, MTYPE_KEYCRYPT_CIPHER_TEXT, pPlainText, PlainTextLen,
+		&pCipherTextRaw, &CipherTextRawLen);
+	if (rc)
+		return -1;
+
+	krc = keycrypt_base64_encode_gcrypt(pCipherTextRaw, CipherTextRawLen,
+					    ppCipherTextB64, &B64len);
+
+	if (krc) {
+		zlog_err("%s: %s returned %d: %s", __func__,
+			 "keycrypt_base64_encode_gnutls", krc,
+			 keycrypt_strerror(krc));
+		XFREE(MTYPE_KEYCRYPT_CIPHER_TEXT, pCipherTextRaw);
+		return krc;
+	}
+
+	if (pCipherTextB64Len)
+		*pCipherTextB64Len = B64len;
+
+	XFREE(MTYPE_KEYCRYPT_CIPHER_TEXT, pCipherTextRaw);
+
+	return 0;
+}
+
+static int keycrypt_encrypt_gcrypt_pkcs1(
+	const char	*pPlainText,		/* IN */
+	size_t		PlainTextLen,		/* IN */
+	char		**ppCipherTextB64,	/* OUT */
+	size_t		*pCipherTextB64Len)	/* OUT */
+{
+	return keycrypt_encrypt_gcrypt_padding(1, pPlainText, PlainTextLen,
+		ppCipherTextB64, pCipherTextB64Len);
+}
+
+static int keycrypt_encrypt_gcrypt_oaep(
+	const char	*pPlainText,		/* IN */
+	size_t		PlainTextLen,		/* IN */
+	char		**ppCipherTextB64,	/* OUT */
+	size_t		*pCipherTextB64Len)	/* OUT */
+{
+	return keycrypt_encrypt_gcrypt_padding(0, pPlainText, PlainTextLen,
+		ppCipherTextB64, pCipherTextB64Len);
+}
+
+/* clang-format off */
+static int keycrypt_decrypt_gcrypt_padding(
+	bool		use_pkcs1_padding,		/* 0: oaep */
+	struct memtype	*mt,	/* of PlainText */	/* IN */
+	const char	*pCipherTextB64,		/* IN */
+	size_t		CipherTextB64Len,		/* IN */
+	char		**ppPlainText,			/* OUT */
+	size_t		*pPlainTextLen)			/* OUT */
+{
+	gcry_sexp_t		pPrivKey;
+	gcry_sexp_t		pPubKey;
+	int			rc;
+	char			*pCipherTextRaw;
+	size_t			CipherTextRawLen = 0;
+	size_t			PlainTextLen = 0;
+	keycrypt_err_t		krc;
+	/* clang-format on */
+
+	keycrypt_get_pkey_gcrypt(&pPrivKey, &pPubKey);
+	if (!pPrivKey)
+		return -1;
+
+	krc = keycrypt_base64_decode_gcrypt(pCipherTextB64, CipherTextB64Len,
+				      &pCipherTextRaw, &CipherTextRawLen);
+	if (krc) {
+		zlog_err("%s: Error: %s returned %d: %s",
+			__func__, "keycrypt_base64_decode_gcrypt",
+			krc, keycrypt_strerror(krc));
+		return -1;
+	}
+
+	rc = keycrypt_decrypt_internal_gcrypt_padding(
+		0, pPrivKey, mt,
+		pCipherTextRaw, CipherTextRawLen,
+		ppPlainText, &PlainTextLen);
+
+	XFREE(MTYPE_KEYCRYPT_B64DEC, pCipherTextRaw);
+
+	if (rc)
+		return -1;
+
+	if (pPlainTextLen)
+		*pPlainTextLen = PlainTextLen;
+
+	return 0;
+}
+
+static int keycrypt_decrypt_gcrypt_pkcs1(
+	struct memtype	*mt,	/* of PlainText */	/* IN */
+	const char	*pCipherTextB64,		/* IN */
+	size_t		CipherTextB64Len,		/* IN */
+	char		**ppPlainText,			/* OUT */
+	size_t		*pPlainTextLen)			/* OUT */
+{
+	return keycrypt_decrypt_gcrypt_padding(1,
+		mt, pCipherTextB64, CipherTextB64Len,
+		ppPlainText, pPlainTextLen);
+}
+
+static int keycrypt_decrypt_gcrypt_oaep(
+	struct memtype	*mt,	/* of PlainText */	/* IN */
+	const char	*pCipherTextB64,		/* IN */
+	size_t		CipherTextB64Len,		/* IN */
+	char		**ppPlainText,			/* OUT */
+	size_t		*pPlainTextLen)			/* OUT */
+{
+	return keycrypt_decrypt_gcrypt_padding(0,
+		mt, pCipherTextB64, CipherTextB64Len,
+		ppPlainText, pPlainTextLen);
+}
+
+/* clang-format off */
+static int debug_keycrypt_test_cmd_gcrypt_padding(
+	bool		use_pkcs1_padding,		/* 0: oaep */
+	struct vty	*vty,
+	const char	*cleartext)
+{
+	char			*keyfile_path = NULL;
+	gcry_sexp_t		pPrivKey;
+	gcry_sexp_t		pPubKey;
+
+	int			rc;
+	keycrypt_err_t		krc;
+	char			*pCipherText = NULL;
+	size_t			CipherTextLen;
+	char			*pClearText = NULL;
+	size_t			ClearTextLen;
+	char			*pB64Text;
+	size_t			B64TextLen = 0;
+	/* clang-format on */
+
+	keyfile_path = keycrypt_keyfile_path();
+	if (!keyfile_path) {
+		vty_out(vty, "%s: Error: can't compute keyfile path\n",
+			__func__);
+		return CMD_SUCCESS;
+	}
+
+	zlog_debug("%s: Computed keyfile_path: %s", __func__, keyfile_path);
+
+	krc = keycrypt_read_keyfile_gcrypt(keyfile_path, &pPrivKey, &pPubKey);
+	if (krc) {
+		vty_out(vty, "%s: Error: %s returned %d: %s\n", __func__,
+			"keycrypt_read_keyfile_gcrypt", krc,
+			keycrypt_strerror(krc));
+		XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+		return CMD_SUCCESS;
+	}
+
+	zlog_debug("%s: Read keyfile", __func__);
+
+	krc = keycrypt_encrypt_internal_gcrypt_padding(use_pkcs1_padding,
+		pPrivKey, MTYPE_KEYCRYPT_CIPHER_TEXT, cleartext,
+		strlen(cleartext), &pCipherText, &CipherTextLen);
+	if (krc) {
+		vty_out(vty, "%s: Error: %s returned %d: %s\n", __func__,
+			"keycrypt_encrypt_internal_gcrypt_padding", krc,
+			keycrypt_strerror(krc));
+		return CMD_SUCCESS;
+	}
+
+	zlog_debug("%s: encrypted successfully", __func__);
+
+	if (!pCipherText) {
+		vty_out(vty, "%s: missing cipher text\n", __func__);
+		return CMD_SUCCESS;
+	}
+
+	/*
+	 * Encode for printing
+	 */
+
+	krc = keycrypt_base64_encode_gcrypt(pCipherText, CipherTextLen,
+					    &pB64Text, &B64TextLen);
+
+	XFREE(MTYPE_KEYCRYPT_CIPHER_TEXT, pCipherText);
+
+	if (krc) {
+		vty_out(vty, "%s: Error: %s returned %d: %s\n", __func__,
+			"keycrypt_base64_encode_gcrypt", krc,
+			keycrypt_strerror(krc));
+		/* TBD does anything else need to be freed here? */
+		return CMD_SUCCESS;
+	}
+
+	zlog_debug("%s: base64-encoded successfully", __func__);
+
+	vty_out(vty,
+		"INFO: clear text len: %zu, CipherTextLen: %zu, B64TextLen %zu\n",
+		strlen(cleartext), CipherTextLen, B64TextLen);
+
+	vty_out(vty, "INFO: base64 cipher text:\n%s\n", pB64Text);
+
+
+	/*
+	 * Decode back to binary
+	 */
+	keycrypt_base64_decode_gcrypt(pB64Text, B64TextLen, &pCipherText,
+				      &CipherTextLen);
+
+	vty_out(vty, "INFO: After B64 decode, CipherTextLen: %zu\n",
+		CipherTextLen);
+
+
+	rc = keycrypt_decrypt_internal_gcrypt_padding(
+		use_pkcs1_padding, pPrivKey, MTYPE_KEYCRYPT_PLAIN_TEXT,
+		pCipherText, CipherTextLen,
+		&pClearText, &ClearTextLen);
+
+	XFREE(MTYPE_KEYCRYPT_CIPHER_B64, pB64Text);
+
+	if (pCipherText) {
+		if (!strncmp(cleartext, pCipherText, strlen(cleartext))) {
+			vty_out(vty,
+				"%s: cipher text and cleartext same for %zu chars\n",
+				__func__, strlen(cleartext));
+			XFREE(MTYPE_KEYCRYPT_B64DEC, pCipherText);
+			if (pClearText)
+				XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pClearText);
+			return CMD_SUCCESS;
+		}
+		XFREE(MTYPE_KEYCRYPT_B64DEC, pCipherText);
+	}
+
+	if (rc) {
+		vty_out(vty, "%s: Error: keycrypt_decrypt_internal_gcrypt_padding\n",
+			__func__);
+		if (pClearText)
+			XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pClearText);
+		return CMD_SUCCESS;
+	}
+
+	if (!pClearText) {
+		vty_out(vty,
+			"%s: keycrypt_decrypt_internal_gcrypt_padding didn't return clear text pointer\n",
+			__func__);
+		return CMD_SUCCESS;
+	}
+	if (strlen(cleartext) != ClearTextLen) {
+		vty_out(vty,
+			"%s: decrypted ciphertext length (%zu) != original length (%lu)\n",
+			__func__, ClearTextLen, strlen(cleartext));
+		XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pClearText);
+		return CMD_SUCCESS;
+	}
+
+	if (strncmp(cleartext, pClearText, ClearTextLen)) {
+		vty_out(vty,
+			"%s: decrypted ciphertext differs from original text\n",
+			__func__);
+		XFREE(MTYPE_KEYCRYPT_PLAIN_TEXT, pClearText);
+		return CMD_SUCCESS;
+	}
+
+	vty_out(vty, "OK: decrypted ciphertext matches original text\n");
+	return CMD_SUCCESS;
+}
+
+static int debug_keycrypt_test_cmd_gcrypt_pkcs1(
+	struct vty	*vty,
+	const char	*cleartext)
+{
+	return debug_keycrypt_test_cmd_gcrypt_padding(1, vty, cleartext);
+}
+
+static int debug_keycrypt_test_cmd_gcrypt_oaep(
+	struct vty	*vty,
+	const char	*cleartext)
+{
+	return debug_keycrypt_test_cmd_gcrypt_padding(0, vty, cleartext);
+}
+
+static keycrypt_err_t keyfile_read_status_gcrypt(const char *keyfile_path,
+						 const char **detail)
+{
+	keycrypt_err_t krc;
+	gcry_sexp_t		pPrivKey;
+	gcry_sexp_t		pPubKey;
+
+	*detail = NULL;
+
+	krc = keycrypt_read_keyfile_gcrypt(keyfile_path, &pPrivKey, &pPubKey);
+	if (krc)
+		*detail = keycrypt_strerror(krc);
+
+	return krc;
+}
+
+static const char *keycrypt_backend_version_string_gcrypt(void)
+{
+    static char versionstring[80];	/* arbitrary limit */
+
+    versionstring[0] = 0;
+
+    char *str = gcry_get_config (0, "version");
+    if (str) {
+	strlcpy(versionstring, str, sizeof(versionstring));
+	gcry_free(str);
+	return versionstring;
+    }
+    return "gcrypt (unknown version)";
+}
+
+keycrypt_backend_t kbe_gcrypt_pkcs1 = {
+	.name			= "gcrypt-pkcs1-padding",
+	.f_encrypt		= keycrypt_encrypt_gcrypt_pkcs1,
+	.f_decrypt		= keycrypt_decrypt_gcrypt_pkcs1,
+	.f_test_cmd		= debug_keycrypt_test_cmd_gcrypt_pkcs1,
+	.f_keyfile_read_status	= keyfile_read_status_gcrypt,
+	.f_be_version_string	= keycrypt_backend_version_string_gcrypt,
+};
+
+keycrypt_backend_t kbe_gcrypt_oaep = {
+	.name			= "gcrypt",
+	.f_encrypt		= keycrypt_encrypt_gcrypt_oaep,
+	.f_decrypt		= keycrypt_decrypt_gcrypt_oaep,
+	.f_test_cmd		= debug_keycrypt_test_cmd_gcrypt_oaep,
+	.f_keyfile_read_status	= keyfile_read_status_gcrypt,
+	.f_be_version_string	= keycrypt_backend_version_string_gcrypt,
+};
+
+#endif /* KEYCRYPT_HAVE_GCRYPT */
 
 /***********************************************************************
  *		null backend simplifies error handling below
@@ -1387,12 +2673,18 @@ static int debug_keycrypt_test_cmd_null(
 	return CMD_SUCCESS;
 }
 
+static const char *keycrypt_backend_version_string_null(void)
+{
+    return "null backend version 0";
+}
+
 keycrypt_backend_t kbe_null = {
 	.name			= NULL,
 	.f_encrypt		= keycrypt_encrypt_null,
 	.f_decrypt		= keycrypt_decrypt_null,
 	.f_test_cmd		= debug_keycrypt_test_cmd_null,
-	.f_keyfile_read_status	= keyfile_read_status_gnutls,
+	.f_keyfile_read_status	= NULL,
+	.f_be_version_string	= keycrypt_backend_version_string_null,
 };
 /* clang-format on */
 
@@ -1404,17 +2696,32 @@ keycrypt_backend_t kbe_null = {
 /*
  * first backend present is the one we use
  */
+/* clang-format off */
 static keycrypt_backend_t *keycrypt_backends[] = {
-#if KEYCRYPT_HAVE_GNUTLS
-	&kbe_gnutls,
+#ifdef KEYCRYPT_HAVE_GCRYPT
+	&kbe_gcrypt_oaep,
+#if KEYCRYPT_ENABLE_PKCS1_PADDING
+	&kbe_gcrypt_pkcs1,
 #endif
-#if KEYCRYPT_HAVE_OPENSSL
-	&kbe_openssl,
+#endif
+#ifdef KEYCRYPT_HAVE_OPENSSL
+	&kbe_openssl_oaep,
+#if KEYCRYPT_ENABLE_PKCS1_PADDING
+	&kbe_openssl_pkcs1,
+#endif
+#endif
+#ifdef KEYCRYPT_HAVE_GNUTLS
+#if KEYCRYPT_ENABLE_PKCS1_PADDING
+	&kbe_gnutls_pkcs1,
+#endif
 #endif
 	&kbe_null,
 	NULL};
+/* clang-format on */
 
-#define KC_BACKEND (keycrypt_backends[0])
+keycrypt_backend_t *kc_current_backend;
+
+#define KC_BACKEND (kc_current_backend)
 
 const char *keycrypt_strerror(keycrypt_err_t kc_err)
 {
@@ -1437,6 +2744,10 @@ const char *keycrypt_strerror(keycrypt_err_t kc_err)
 		return "Can't read private key file";
 	case KC_ERR_KEYFILE_PARSE:
 		return "Can't parse private key file";
+	case KC_ERR_KEYFILE_EXISTS:
+		return "Keyfile already exists";
+	case KC_ERR_INTERNAL:
+		return "Unexpected/internal error";
 	}
 	return "Unknown error";
 }
@@ -1502,9 +2813,48 @@ keycrypt_build_passwords(
 	*ppCryptText = XSTRDUP(MTYPE_KEYCRYPT_CIPHER_B64, password_in);
 
 #ifdef KEYCRYPT_ENABLED
-	if (keycrypt_decrypt(mt_plaintext, password_in,
-			     strlen(password_in), ppPlainText, NULL)) {
+	int rc;
 
+	rc = keycrypt_decrypt(mt_plaintext, password_in,
+			     strlen(password_in), ppPlainText, NULL);
+
+#if defined KEYCRYPT_FALLBACK_OAEP_DECRYPT && defined KEYCRYPT_HAVE_OPENSSL
+	if (rc) {
+	    /*
+	     * Some pre-release customers have config files that
+	     * contain protocol keys encrypted with oaep padding.
+	     * Attempt decryption with openssl oaep padding
+	     */
+	    zlog_warn("%s: decrypt failed, attempting openssl oaep decrypt",
+		    __func__);
+	    rc = keycrypt_decrypt_openssl_oaep(mt_plaintext, password_in,
+		    strlen(password_in), ppPlainText, NULL);
+	    zlog_warn("%s: openssl oaep decrypt %s",
+		    __func__, (rc? "failed": "succeeded"));
+
+	    if (!rc) {
+		    /*
+		     * oaep decrypt succeeded: update encrypted pw to
+		     * plain pkcs padding
+		     */
+		    XFREE(MTYPE_KEYCRYPT_CIPHER_B64, *ppCryptText);
+		    if (keycrypt_encrypt(*ppPlainText, strlen(*ppPlainText),
+			ppCryptText, NULL)) {
+
+			/* oops */
+			*ppCryptText =
+			    XSTRDUP(MTYPE_KEYCRYPT_CIPHER_B64, password_in);
+			zlog_warn("%s: failed to reencrypt oaep->pkcs",
+			    __func__);
+		    } else {
+			zlog_warn("%s: successfully reencrypted  oaep->pkcs",
+			    __func__);
+		    }
+	    }
+	}
+#endif
+
+	if (rc) {
 	    zlog_err("%s: keycrypt_decrypt failed", __func__);
 	    return KC_ERR_DECRYPT;
 	}
@@ -1667,7 +3017,70 @@ static void inter_backend_test(
 /* clang-format off */
 DEFUN_HIDDEN (debug_keycrypt_test_inter_backend,
 	      debug_keycrypt_test_inter_backend_cmd,
-	      "debug keycrypt-test-inter-backend STRING",
+	      "debug keycrypt-test-inter-backend BE1 BE2 STRING",
+	      "Debug command\n"
+	      "Test keycrypt encryption and decryption\n"
+	      "Name of first backend\n"
+	      "Name of second backend\n"
+	      "plain text to encrypt and decrypt\n")
+/* clang-format on */
+{
+	int idx = 0;
+	const char *cleartext = NULL;
+
+	const char *name1 = NULL;
+	const char *name2 = NULL;
+
+	keycrypt_backend_t *b1 = NULL;
+	keycrypt_backend_t *b2 = NULL;
+	keycrypt_backend_t **p;
+
+	if (argv_find(argv, argc, "BE1", &idx))
+		name1 = argv[idx]->arg;
+	if (argv_find(argv, argc, "BE2", &idx))
+		name2 = argv[idx]->arg;
+	if (argv_find(argv, argc, "STRING", &idx))
+		cleartext = argv[idx]->arg;
+
+	for (p = keycrypt_backends; *p; ++p) {
+		if (!(*p)->name)
+			continue;
+		if (!strcmp((*p)->name, name1))
+			b1 = *p;
+		if (!strcmp((*p)->name, name2))
+			b2 = *p;
+	}
+
+	/*
+	 * Do we have cleartext?
+	 */
+	if (!cleartext) {
+		vty_out(vty, "no %s\n", "cleartext");
+		return CMD_SUCCESS;
+	}
+
+	/*
+	 * Do we have both backends?
+	 */
+	if (!b1) {
+		vty_out(vty, "no %s\n", name1);
+		return CMD_SUCCESS;
+	}
+	if (!b2) {
+		vty_out(vty, "no %s\n", name2);
+		return CMD_SUCCESS;
+	}
+
+	inter_backend_test(vty, cleartext, b1, b2);
+	inter_backend_test(vty, cleartext, b2, b1);
+
+	return CMD_SUCCESS;
+}
+
+/* clang-format off */
+DEFUN_HIDDEN (debug_keycrypt_test_inter_padding,
+	      debug_keycrypt_test_inter_padding_cmd,
+	      "debug keycrypt-test-inter-padding STRING",
 	      "Debug command\n"
 	      "Test keycrypt encryption and decryption\n"
 	      "plain text to encrypt and decrypt\n")
@@ -1676,33 +3089,104 @@ DEFUN_HIDDEN (debug_keycrypt_test_inter_backend,
 	int idx_string = 2;
 	const char *cleartext = argv[idx_string]->arg;
 
-	keycrypt_backend_t *b_gnutls = NULL;
-	keycrypt_backend_t *b_openssl = NULL;
+	keycrypt_backend_t *b1 = NULL;
+	keycrypt_backend_t *b2 = NULL;
 	keycrypt_backend_t **p;
 
 	for (p = keycrypt_backends; *p; ++p) {
 		if (!(*p)->name)
 			continue;
-		if (!strcmp((*p)->name, "gnutls"))
-			b_gnutls = *p;
 		if (!strcmp((*p)->name, "openssl"))
-			b_openssl = *p;
+			b1 = *p;
+		if (!strcmp((*p)->name, "openssl-oaep"))
+			b2 = *p;
 	}
 
 	/*
-	 * Do we have both real backends?
+	 * Do we have both backends?
 	 */
-	if (!b_gnutls) {
-		vty_out(vty, "no gnutls\n");
+	if (!b1) {
+		vty_out(vty, "no b1\n");
 		return CMD_SUCCESS;
 	}
-	if (!b_openssl) {
-		vty_out(vty, "no openssl\n");
+	if (!b2) {
+		vty_out(vty, "no b2\n");
 		return CMD_SUCCESS;
 	}
 
-	inter_backend_test(vty, cleartext, b_gnutls, b_openssl);
-	inter_backend_test(vty, cleartext, b_openssl, b_gnutls);
+	inter_backend_test(vty, cleartext, b2, b1);
+	inter_backend_test(vty, cleartext, b1, b2);
+
+	return CMD_SUCCESS;
+}
+
+/* clang-format off */
+DEFUN_HIDDEN (debug_keycrypt_show_backends,
+	      debug_keycrypt_show_backends_cmd,
+	      "debug keycrypt show backends",
+	      "Debug command\n"
+	      "Keycrypt encryption and decryption\n"
+	      "show\n"
+	      "list available crypto backends\n")
+/* clang-format on */
+{
+	keycrypt_backend_t **p;
+
+	for (p = keycrypt_backends; *p; ++p) {
+		const char *version;
+		bool selected;
+
+		if (!(*p)->name)
+			continue;
+		if ((*p)->f_be_version_string)
+			version = ((*p)->f_be_version_string)();
+		else
+			version = "?";
+
+		if (*p == kc_current_backend)
+			selected = true;
+		else
+			selected = false;
+
+		vty_out(vty, "%c%s: %s\n",
+			(selected? '*': ' '), (*p)->name, version);
+	}
+
+	return CMD_SUCCESS;
+}
+
+/* clang-format off */
+DEFUN_HIDDEN (debug_keycrypt_set_backend,
+	      debug_keycrypt_set_backend_cmd,
+	      "debug keycrypt set backend STRING",
+	      "Debug command\n"
+	      "keycrypt encryption and decryption\n"
+	      "set\n"
+	      "backend\n"
+	      "select an available crypto backend")
+/* clang-format on */
+{
+	int idx_string = 4;
+	const char *be_name = argv[idx_string]->arg;
+
+	keycrypt_backend_t *b = NULL;
+	keycrypt_backend_t **p;
+
+	for (p = keycrypt_backends; *p; ++p) {
+		if (!(*p)->name)
+			continue;
+		if (!strcmp((*p)->name, be_name)) {
+			b = *p;
+			break;
+		}
+	}
+
+	if (!b) {
+		vty_out(vty, "keycrypt: unknown backend \"%s\"\n", be_name);
+		return CMD_SUCCESS;
+	}
+
+	kc_current_backend = b;
 
 	return CMD_SUCCESS;
 }
@@ -1753,6 +3237,9 @@ static void keycrypt_show_status_internal(struct vty *vty)
 	vty_out(vty, "%s%s: Keycrypt backend: %s\n", indentstr, frr_protoname,
 		KC_BACKEND->name);
 
+	vty_out(vty, "%s%s: Keycrypt backend version: %s\n", indentstr,
+		frr_protoname, KC_BACKEND->f_be_version_string());
+
 	keyfile_path = keycrypt_keyfile_path();
 
 	if (keyfile_path) {
@@ -1762,22 +3249,24 @@ static void keycrypt_show_status_internal(struct vty *vty)
 		vty_out(vty, "%s%s: Private key file name: \"%s\"\n", indentstr,
 			frr_protoname, keyfile_path);
 
-		krc = (*KC_BACKEND->f_keyfile_read_status)(keyfile_path,
-							   &details);
-		XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
-		if (krc) {
-			vty_out(vty,
+		if (KC_BACKEND->f_keyfile_read_status) {
+			krc = (*KC_BACKEND->f_keyfile_read_status)(
+				keyfile_path, &details);
+		    XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+		    if (krc) {
+			    vty_out(vty,
 				"%s%s: Private key file status: NOT READABLE\n",
 				indentstr, frr_protoname);
-			if (details) {
-				vty_out(vty,
+			    if (details) {
+				    vty_out(vty,
 					"%s%s: Private key file details: %s\n",
 					indentstr, frr_protoname, details);
-			}
-		} else {
-			vty_out(vty,
+			    }
+		    } else {
+			    vty_out(vty,
 				"%s%s: Private key file status: readable\n",
 				indentstr, frr_protoname);
+		    }
 		}
 
 	} else {
@@ -1813,7 +3302,16 @@ DEFUN (keycrypt_show_status,
 
 void keycrypt_init(void)
 {
+	kc_current_backend = keycrypt_backends[0];
+
+	install_element(VIEW_NODE, &debug_keycrypt_show_backends_cmd);
+
+	install_element(ENABLE_NODE, &debug_keycrypt_set_backend_cmd);
+	/* install in config node for benefit of topotests/authentication */
+	install_element(CONFIG_NODE, &debug_keycrypt_set_backend_cmd);
+
 	install_element(VIEW_NODE, &debug_keycrypt_test_cmd);
 	install_element(VIEW_NODE, &debug_keycrypt_test_inter_backend_cmd);
+	install_element(VIEW_NODE, &debug_keycrypt_test_inter_padding_cmd);
 	install_element(VIEW_NODE, &keycrypt_show_status_cmd);
 }

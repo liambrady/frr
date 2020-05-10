@@ -66,6 +66,17 @@ def test_check_keys1():
     else:
         ltemplateTest('scripts/check-keys.py', False, CliOnFail, CheckFunc)
 
+# test for backend diversity (only runs if FRR built with desired backends)
+def test_check_backend_diversity():
+    CheckFunc = 'ltemplateVersionCheck(\'4.1\', kernel=None)'
+    #uncomment next line to start cli *before* script is run
+    #CheckFunc = 'ltemplateVersionCheck(\'4.1\', cli=True, kernel=None)'
+    if RunTests != True:
+         pytest.skip('keycrypt not included in software build')
+    else:
+        ltemplateTest('scripts/check-crypto-backend-diversity.py', False, CliOnFail, CheckFunc)
+
+
 #test conversion first (then do re-boots, and test again)
 
 def test_rip_show1():
