@@ -2603,6 +2603,100 @@ static keycrypt_err_t keyfile_read_status_gcrypt(const char *keyfile_path,
 	return krc;
 }
 
+static keycrypt_err_t genkey_gcrypt(void)
+{
+	char		*keyfile_path = NULL;
+	gcry_error_t	grc;
+	gcry_sexp_t	s_parms = NULL;
+	gcry_sexp_t	s_key = NULL;
+	size_t		len = 0;
+	char		*key_str = NULL;
+
+#ifdef LATER
+	/*
+	 * If keyfile already exists, don't overwrite
+	 */
+	keyfile_path = keycrypt_keyfile_path();
+	if (!keyfile_path) {
+		zlog_debug("%s: Error: can't compute keyfile path", __func__);
+		vty_out(vty, "%s: Error: can't compute keyfile path\n",
+			__func__);
+		return CMD_SUCCESS;
+	}
+
+	int rc;
+	struct stat sb;
+	rc = stat(keyfile_path, &sb);
+	if (!rc) {
+		/*
+		 * stat succeeds, must not overwrite file
+		 */
+		zlog_debug("%s: Error: keyfile exists, not overwriting",
+			__func__);
+		XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+		return KC_ERR_KEYFILE_EXISTS;
+	}
+#endif
+
+	grc = gcry_sexp_build(&s_parms, NULL,
+		"(genkey(rsa(nbits 4:2048)))", NULL);
+	if (grc) {
+		zlog_debug("%s: Error: can't build rsa params sexp",
+			__func__);
+		XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+		return KC_ERR_INTERNAL;
+	}
+
+	/*
+	 * NB: if /dev/random blocks, it could greatly slow this function
+	 */
+	grc = gcry_pk_genkey(&s_key, s_parms);
+	gcry_sexp_release(s_parms);
+	if (grc) {
+		zlog_debug("%s: Error: gcry_pk_genkey returned %d: \"%s\"",
+			__func__, grc, gcry_strerror(grc));
+		XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+		return KC_ERR_INTERNAL;
+	}
+
+	/*
+	 * Determine required buffer length. Per documentation,
+	 * returned length includes space for trailing NUL.
+	 */
+	/* GCRYSEXP_FMT_CANON (may contain unprintable characters) */
+	/* GCRYSEXP_FMT_DEFAULT (may contain unprintable characters) */
+	/* GCRYSEXP_FMT_ADVANCED */
+	len = gcry_sexp_sprint(s_key, GCRYSEXP_FMT_ADVANCED, NULL, 0);
+	if (!len) {
+		zlog_debug("%s: Error: can't compute buffer size",
+			__func__);
+		XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+		gcry_sexp_release(s_key);
+		return KC_ERR_INTERNAL;
+	}
+
+printf("%s: len %zu\n", __func__, len);
+
+	key_str = XMALLOC(MTYPE_TMP, len);
+	len = gcry_sexp_sprint(s_key, GCRYSEXP_FMT_ADVANCED, key_str, len);
+	gcry_sexp_release(s_key);
+	if (!len) {
+		zlog_debug("%s: Error: can't serialize key",
+			__func__);
+		XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+		XFREE(MTYPE_TMP, key_str);
+		gcry_sexp_release(s_key);
+		return KC_ERR_INTERNAL;
+	}
+
+printf("%s: genkey s-expression (len %zu, strlen %zu): %s\n",
+    __func__, len, strlen(key_str), key_str);
+
+	XFREE(MTYPE_TMP, key_str);
+	XFREE(MTYPE_KEYCRYPT_KEYFILE_PATH, keyfile_path);
+	return KC_OK;
+}
+
 static const char *keycrypt_backend_version_string_gcrypt(void)
 {
     static char versionstring[80];	/* arbitrary limit */
@@ -3191,6 +3285,24 @@ DEFUN_HIDDEN (debug_keycrypt_set_backend,
 	return CMD_SUCCESS;
 }
 
+/* clang-format off */
+DEFUN_HIDDEN (debug_keycrypt_genkey,
+	      debug_keycrypt_genkey_cmd,
+	      "debug keycrypt genkey",
+	      "Debug command\n"
+	      "keycrypt encryption and decryption\n"
+	      "generate new key")
+/* clang-format on */
+{
+	keycrypt_err_t	krc;
+
+	krc = genkey_gcrypt();
+	if (krc)
+		vty_out(vty, "Error: %s", keycrypt_strerror(krc));
+
+	return CMD_SUCCESS;
+}
+
 static bool keycrypt_now_encrypting = false;
 static keycrypt_callback_t *keycrypt_protocol_callback = NULL;
 static keycrypt_show_callback_t *keycrypt_protocol_show_callback = NULL;
@@ -3314,4 +3426,7 @@ void keycrypt_init(void)
 	install_element(VIEW_NODE, &debug_keycrypt_test_inter_backend_cmd);
 	install_element(VIEW_NODE, &debug_keycrypt_test_inter_padding_cmd);
 	install_element(VIEW_NODE, &keycrypt_show_status_cmd);
+
+/* TBD delete me: move to zebra cli init */
+install_element(ENABLE_NODE, &debug_keycrypt_genkey_cmd);
 }
