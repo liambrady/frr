@@ -3,15 +3,15 @@ os: linux
 language: c
 services:
   - docker
-script:
-  - pwd
-  - uname -a
-  - whoami
-  - df
-  - apt list
-  - ls -al /lib/modules
-  - ls -al /usr/src
 jobs:
+  script:
+    - pwd
+    - uname -a
+    - whoami
+    - df
+    - apt list
+    - ls -al /lib/modules
+    - ls -al /usr/src
   include:
    - script:
        - echo "dummy target 1"
