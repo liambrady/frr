@@ -4,10 +4,12 @@ language: c
 services:
   - docker
 script:
+  - env
   - pwd
+  - ls -al
   - uname -a
   - whoami
   - df
-  - apt list
+  - apt-cache search linux-modules
   - ls -al /lib/modules
   - ls -al /usr/src
