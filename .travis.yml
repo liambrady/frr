@@ -10,6 +10,8 @@ script:
   - uname -a
   - whoami
   - df
+  - echo $(uname -r)
+  - sudo apt install -y linux-modules-extra-$(uname -r)
   - sudo apt install -y linux-modules-extra-5.4.0-1038-gcp
   - sudo modprobe mpls-router mpls-iptunnel
   - apt-cache search linux-modules
