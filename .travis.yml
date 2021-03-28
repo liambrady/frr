@@ -1,0 +1,21 @@
+dist: focal
+os: linux
+language: c
+services:
+  - docker
+script:
+  - pwd
+  - uname -a
+  - whoami
+  - df
+  - apt list
+  - ls -al /lib/modules
+  - ls -al /usr/src
+jobs:
+  include:
+   - script:
+       - echo "dummy target 1"
+     name: centos7
+   - script:
+       - echo "dummy target 2"
+     name: centos8
