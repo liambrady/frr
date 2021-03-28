@@ -3,19 +3,11 @@ os: linux
 language: c
 services:
   - docker
-jobs:
-  script:
-    - pwd
-    - uname -a
-    - whoami
-    - df
-    - apt list
-    - ls -al /lib/modules
-    - ls -al /usr/src
-  include:
-   - script:
-       - echo "dummy target 1"
-     name: centos7
-   - script:
-       - echo "dummy target 2"
-     name: centos8
+script:
+  - pwd
+  - uname -a
+  - whoami
+  - df
+  - apt list
+  - ls -al /lib/modules
+  - ls -al /usr/src
