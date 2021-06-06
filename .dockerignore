@@ -1,4 +1,5 @@
 .git
+.ccls-cache
 **/*.a
 **/*.o
 **/*.la
@@ -7,3 +8,5 @@
 **/.libs
 docker/alpine/pkgs
 docker/centos/pkgs
+tests/topotests/topotest-buildcache
+topotest-buildcache

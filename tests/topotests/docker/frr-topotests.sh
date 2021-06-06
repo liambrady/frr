@@ -41,6 +41,9 @@ if [[ "$1" = "-h" ]] || [[ "$1" = "--help" ]]; then
 	TOPOTEST_AUTOLOAD       If set to 1, the script will try to load necessary
 	                        kernel modules without asking for confirmation first.
 
+	TOPOTEST_NOCOMPILE      If set to 1, assume buildcache is fully up-to-date
+	                        and do not compile. Defaults to 0
+
 	TOPOTEST_NOLOAD         If set to 1, don't try to load necessary kernel
 	                        modules and don't even ask.
 
@@ -145,15 +148,45 @@ if [ "${TOPOTEST_PULL:-1}" = "1" ]; then
 	docker pull frrouting/topotests:latest
 fi
 
+# can't install from read-only mount apparently.
+# if (( ${TOPOTEST_NOCOMPILE:=0} )); then
+#     echo "Mounting buildcache read only"
+#     TOPOTEST_BUILDCACHE_RO=:ro
+# fi
+
+# Minitnet - wants
+# --sysctl net.core.wmem_max=16777216
+# --sysctl net.core.rmem_max=16777216
+# --sysctl net.ipv4.neigh.default.gc_thresh1=4096
+# --sysctl net.ipv4.neigh.default.gc_thresh2=8192
+# --sysctl net.ipv4.neigh.default.gc_thresh3=16384
+# --sysctl net.core.netdev_max_backlog=5000
+# --sysctl net.ipv4.route.max_size=32768
+
+if [[ -n "$TMUX" ]]; then
+    TMUX_OPTIONS="-v $(dirname $TMUX):$(dirname $TMUX) -e TMUX=$TMUX -e TMUX_PANE=$TMUX_PANE"
+fi
+
+if [[ -n "$STY" ]]; then
+    SCREEN_OPTIONS="-v /run/screen:/run/screen -e STY=$STY"
+fi
+
 set -- --rm -i \
+        -v "/var/crash:/var/crash" \
+        -v "/var/lib/systemd/coredump:/var/lib/systemd/coredump" \
+        -v "$HOME:$HOME:ro" \
 	-v "$TOPOTEST_LOGS:/tmp" \
 	-v "$TOPOTEST_FRR:/root/host-frr:ro" \
-	-v "$TOPOTEST_BUILDCACHE:/root/persist" \
+	-v "$TOPOTEST_BUILDCACHE:/root/persist$TOPOTEST_BUILDCACHE_RO" \
 	-e "TOPOTEST_CLEAN=$TOPOTEST_CLEAN" \
-	-e "TOPOTEST_VERBOSE=$TOPOTEST_VERBOSE" \
 	-e "TOPOTEST_DOC=$TOPOTEST_DOC" \
+	-e "TOPOTEST_NOCOMPILE=${TOPOTEST_NOCOMPILE}" \
 	-e "TOPOTEST_SANITIZER=$TOPOTEST_SANITIZER" \
+	-e "TOPOTEST_VERBOSE=$TOPOTEST_VERBOSE" \
+        --sysctl net.ipv6.conf.all.disable_ipv6=0 \
 	--privileged \
+        $SCREEN_OPTINS \
+        $TMUX_OPTIONS \
 	$TOPOTEST_OPTIONS \
 	frrouting/topotests:latest "$@"
 
@@ -161,4 +194,5 @@ if [ -t 0 ]; then
 	set -- -t "$@"
 fi
 
+echo "Running: docker run $@"
 exec docker run "$@"

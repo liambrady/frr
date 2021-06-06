@@ -32,19 +32,20 @@ set -e
 # Script begin
 #
 "${CDIR}/compile_frr.sh"
-"${CDIR}/openvswitch.sh"
+# "${CDIR}/openvswitch.sh"
 
 cd "${FRR_BUILD_DIR}/tests/topotests"
 
 log_info "Setting permissions on /tmp so we can generate logs"
 chmod 1777 /tmp
 
+# export TOPOTESTS_CHECK_MEMLEAK=/tmp/memleak_
+# export TOPOTESTS_CHECK_STDERR=Yes
 if [ $# -eq 0 ] || ([[ "$1" != /* ]] && [[ "$1" != ./* ]]); then
-	export TOPOTESTS_CHECK_MEMLEAK=/tmp/memleak_
-	export TOPOTESTS_CHECK_STDERR=Yes
 	set -- pytest \
 		--junitxml /tmp/topotests.xml \
 		"$@"
 fi
 
+echo "Running command: $@"
 exec "$@"

@@ -32,6 +32,15 @@ CDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Script begin
 #
 
+# Still need to install the binaries into the container
+if (( $TOPOTEST_NOCOMPILE )); then
+    cd "$FRR_BUILD_DIR" || \
+	log_fatal "failed to find frr directory"
+    make install >/dev/null || \
+	log_fatal "failed to install frr"
+    exit 0
+fi
+
 if [ "${TOPOTEST_CLEAN}" != "0" ]; then
 	log_info "Cleaning FRR builddir..."
 	rm -rf $FRR_BUILD_DIR &> /dev/null
@@ -58,6 +67,7 @@ log_info "Building FRR..."
 if [ ! -e configure ]; then
 	bash bootstrap.sh >&3 || \
 		log_fatal "failed to bootstrap configuration"
+        TOPOTEST_NOCOMPILE=0
 fi
 
 if [ "${TOPOTEST_DOC}" != "0" ]; then
@@ -92,15 +102,19 @@ if [ ! -e Makefile ]; then
 		$EXTRA_CONFIGURE \
 		--with-pkg-extra-version=-topotests \
 		|| log_fatal "failed to configure the sources"
+        TOPOTEST_NOCOMPILE=0
 fi
 
 # if '.address_sanitizer' file exists it means we are using address sanitizer.
 if [ -f .address_sanitizer ]; then
 	make -C lib CFLAGS="-g -O2" LDFLAGS="-g" clippy >&3
+        TOPOTEST_NOCOMPILE=0
 fi
 
-make -j$(cpu_count) >&3 || \
+if (( ! ${TOPOTEST_NOCOMPILE:-0} )); then
+    make -j$(nproc) >&3 || \
 	log_fatal "failed to build the sources"
+fi
 
 make install >/dev/null || \
 	log_fatal "failed to install frr"
