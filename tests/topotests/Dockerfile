@@ -1,47 +1,64 @@
-FROM ubuntu:18.04
+FROM ubuntu:20.04
+ARG DEBIAN_FRONTEND=noninteractive
 
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get install -y \
         autoconf \
+        automake \
         binutils \
         bison \
+        build-essential \
         ca-certificates \
+        cmake \
+        curl \
         flex \
         gdb \
         git \
         gpg \
         install-info \
-        iputils-ping \
         iproute2 \
+        iputils-ping \
         less \
-        libtool \
-        libjson-c-dev \
-        libpcre3-dev \
-        libpython-dev \
-        libpython3-dev \
-        libreadline-dev \
         libc-ares-dev \
         libcap-dev \
         libelf-dev \
+        libgrpc++-dev \
+        libgrpc-dev \
+        libjson-c-dev \
+        libpam0g-dev \
+        libpcre2-dev \
+        libpython3-dev \
+        libreadline-dev \
+        libsnmp-dev \
+        libsystemd-dev \
+        libtool \
+        make \
         man \
         mininet \
+        perl \
         pkg-config \
-        python-pip \
+        protobuf-compiler-grpc \
+        python-ipaddress \
         python3 \
         python3-dev \
-        python3-sphinx \
         python3-pytest \
+        python3-sphinx \
         rsync \
         strace \
+        sudo \
         tcpdump \
         texinfo \
+        time \
         tmux \
         valgrind \
         vim \
         wget \
         x11-xserver-utils \
         xterm \
+    && curl https://bootstrap.pypa.io/pip/2.7/get-pip.py --output /tmp/get-pip.py \
+    && python2 /tmp/get-pip.py \
+    && rm -f /tmp/get-pip.py \
     && pip install \
         exabgp==3.4.17 \
         "scapy>=2.4.2" \
@@ -49,12 +66,17 @@ RUN export DEBIAN_FRONTEND=noninteractive \
         pytest \
     && rm -rf /var/lib/apt/lists/*
 
-RUN export DEBIAN_FRONTEND=noninteractive \
-    && wget -qO- https://deb.frrouting.org/frr/keys.asc | apt-key add - \
-    && echo "deb https://deb.frrouting.org/frr bionic frr-stable" > /etc/apt/sources.list.d/frr.list \
-    && apt-get update \
-    && apt-get install -y libyang-dev \
-    && rm -rf /var/lib/apt/lists/*
+# build and install libyang2
+RUN git clone https://github.com/CESNET/libyang.git && \
+    cd libyang && \
+    git checkout v2.0.7 && \
+    mkdir build; cd build && \
+    cmake -DCMAKE_INSTALL_PREFIX:PATH=/usr \
+    -DCMAKE_BUILD_TYPE:String="Release" .. && \
+    make -j $(nproc) && \
+    sudo make install
+
+RUN rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r -g 92 frr \
     && groupadd -r -g 85 frrvty \
