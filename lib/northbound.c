@@ -673,13 +673,21 @@ int nb_candidate_edit(struct nb_config *candidate,
 			return NB_ERR;
 		} else if (dnode) {
 			/* Create default nodes */
-			LY_ERR err = lyd_new_implicit_tree(
+			LY_ERR err;
+
+#if 0
+			/*
+			 * Igor says this is unneeded now that we've backed out
+			 * broken BGP northbound
+			 */
+			err = lyd_new_implicit_tree(
 				dnode, LYD_IMPLICIT_NO_STATE, NULL);
 			if (err) {
 				flog_warn(EC_LIB_LIBYANG,
 					  "%s: lyd_new_implicit_all failed: %d",
 					  __func__, err);
 			}
+#endif
 			/*
 			 * create dependency
 			 *
@@ -696,10 +704,16 @@ int nb_candidate_edit(struct nb_config *candidate,
 						   NULL, LYD_NEW_PATH_UPDATE,
 						   &dep_dnode);
 				/* Create default nodes */
+#if 0
+				/*
+				 * Igor says this is unneeded now that we've backed out
+				 * broken BGP northbound
+				 */
 				if (!err)
 					err = lyd_new_implicit_tree(
 						dep_dnode,
 						LYD_IMPLICIT_NO_STATE, NULL);
+#endif
 				if (err) {
 					flog_warn(
 						EC_LIB_LIBYANG,
